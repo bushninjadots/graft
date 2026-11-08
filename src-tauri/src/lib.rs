@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod extract;
 mod git;
 mod github;
 mod library;
@@ -100,6 +101,12 @@ pub fn run() {
             profile::github_profile_snapshot,
             profile::github_set_profile_status,
             profile::profile_render,
+            extract::extract_scan,
+            extract::extract_suggest,
+            extract::extract_analyze,
+            extract::extract_plan,
+            extract::extract_execute,
+            extract::extract_runs,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start GRAFT");

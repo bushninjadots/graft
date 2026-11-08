@@ -24,7 +24,7 @@
 │  library.rs    saved searches, collections and local notes    │
 │  git.rs        repository inspection + explicit Git writes     │
 │  secrets.rs    keyring token custody                          │
-│  extract/      (Phase 4) repository analysis                  │
+│  extract.rs    repository scanning + extraction plans         │
 └───────────────────────────┬──────────────────────────────────┘
                             │
               SQLite (XDG data dir) · keyring (secrets) · OS tools
@@ -43,13 +43,13 @@ Rules that keep this maintainable:
 | Path | Purpose |
 | ---- | ------- |
 | `src/App.svelte` | shell composition, keyboard shortcuts, boot sequence |
-| `src/views/` | Home, Projects, Repositories, Repository, Terminal, Review, Explore, Collections, ProfileStudio, Watchtower, Settings, ModuleView |
-| `src/lib/state/` | `appearance`, `nav`, `dashboard`, `github`, `notifications`, `sync`, `session`, `terminal`, `watchtower`, `library`, `ui` |
+| `src/views/` | Home, Projects, Repositories, Repository, Terminal, Review, Explore, Collections, Extract, ProfileStudio, Watchtower, Settings, ModuleView |
+| `src/lib/state/` | `appearance`, `nav`, `dashboard`, `github`, `notifications`, `sync`, `session`, `terminal`, `watchtower`, `library`, `extract`, `ui` |
 | `src-tauri/src/schema/` | numbered SQL migrations, embedded with `include_str!` |
 | `~/.local/share/dev.graft.desktop/graft.db` | local database (WAL) |
 | `~/.local/share/dev.graft.desktop/` | app data root (Tauri `app_data_dir`) |
 
-## Data model (schema 4)
+## Data model (schema 5)
 
 ```sql
 settings(key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER)
@@ -63,6 +63,9 @@ collection_repos(id INTEGER PK, collection_id INTEGER REFERENCES collections(id)
                  full_name TEXT, status TEXT, notes TEXT, ...)
 repo_visits(full_name TEXT PK, owner TEXT, name TEXT, language TEXT, topics TEXT,
             visit_count INTEGER, last_visited_at INTEGER, ...)
+extraction_runs(id INTEGER PK, source TEXT, target TEXT, name TEXT, strategy TEXT,
+                file_count INTEGER, total_bytes INTEGER, backup_path TEXT, status TEXT,
+                message TEXT, created_at INTEGER)
 ```
 
 Migrations are append-only: add `schema/00N_*.sql`, bump `SCHEMA_VERSION`, add an
@@ -161,6 +164,12 @@ Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`
 | `collection_add_repo` | `collectionId, owner, repo` | `CollectionRepo` (metadata read from GitHub) |
 | `collection_update_repo` | `id, status, notes` | `CollectionRepo` |
 | `collection_remove_repo` | `id` | `void` |
+| `extract_scan` | `source` | `ExtractScan` (read-only, skips symlinks and caches) |
+| `extract_suggest` | `source` | `ExtractComponent[]` scored directories |
+| `extract_analyze` | `source, selection` | `ExtractAnalysis` (internal, incoming, outgoing, external) |
+| `extract_plan` | `source, selection, strategy, target, name` | `ExtractPlan` with checks, warnings and actions |
+| `extract_execute` | `source, selection, strategy, target, name, confirmed` | `ExtractResult`; re-validates and records the run |
+| `extract_runs` | — | `ExtractionRun[]` (recent successful runs) |
 
 Serde maps snake_case fields to camelCase for JS. GitHub payloads deserialize from
 the API's snake_case and serialize with `rename_all(serialize = "camelCase")`. Bump this table when adding a

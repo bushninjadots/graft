@@ -24,7 +24,11 @@ It also includes Profile Studio (live snapshot, presets, pins, stats, activity m
 achievements, organisations, local draft, explicit publish), repository text-file
 editing with push-access checks, issue listing/creation, three repository layouts,
 live profile status editing with device-flow scope upgrade, and focus/timer sync
-with unread GitHub notification import. Phase 0 is complete and verified as well.
+with unread GitHub notification import. Phase 4 adds Extract Studio: a read-only
+repository scanner with language adapters, import-graph analysis, component
+suggestions, pre-flight extraction plans and confirmed copy, move and history-split
+strategies with backups and a recorded run log. Phase 0 is complete and verified as
+well.
 
 Delivered in Phase 1a:
 
@@ -216,11 +220,29 @@ workspace, with Code Review as the repository chooser.
 
 ---
 
-## Phase 4 — Extract Studio
+## Phase 4 — Extract Studio (complete for copy, move and history split)
 
-Language adapters (Rust, TS/JS, Python, Go, C/C++, shell) over a repository scanner;
-dependency and internal-reference analysis; extraction plans; copy/move/split/fork;
-`git filter-repo` for history; validation report; project relationship graph.
+`extract.rs` scans a repository without following symlinks or descending into VCS
+metadata, dependency caches and build output. It records language statistics,
+manifests and the Git branch, then parses imports for Rust, TypeScript/JavaScript,
+Svelte, Python, Go, C/C++ and shell into an internal reference graph. Analysis
+reports internal edges, incoming and outgoing coupling, external packages, cohesion
+and file sizes; suggestions score directories by cohesion, size and manifest
+presence. Every plan re-validates the selection and target, refuses traversal and
+nested or non-empty destinations, and lists its checks, warnings, writes, backup and
+history prefix before anything happens.
+
+Three strategies ship: **copy** writes a verified duplicate and leaves the source
+untouched; **move** copies, verifies, writes a full backup under the app data
+directory, then removes the originals; **history** clones the repository and uses
+`git subtree split --prefix` so the component directory's commits become an
+independent repository. Destructive strategies require a second confirmation. The
+Rust side rebuilds and re-checks the plan inside execute, and successful runs are
+recorded in `extraction_runs`.
+
+Still to add: `git filter-repo` as an alternative history engine, fork/branch
+strategies and the cross-project relationship graph. Extract Studio therefore links
+completed extractions through its run log rather than a graph view.
 
 ---
 

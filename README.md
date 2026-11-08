@@ -17,9 +17,11 @@ window.
 > Explore searches public GitHub and saves queries; Collections keeps a local library
 > with statuses and notes. Watchtower polls favourite repositories with conditional
 > requests, stores alert history in SQLite, sends native notifications when the window
-> is hidden and runs background monitoring only when opted in. Extract Studio, AI and
-> plugins remain scheduled phases and render explicit planned modules — never fake
-> data. See [`docs/PLAN.md`](docs/PLAN.md).
+> is hidden and runs background monitoring only when opted in. Extract Studio scans a
+> repository read-only, maps imports across Rust, TypeScript/JavaScript, Svelte,
+> Python, Go, C/C++ and shell, and produces a checked plan for copy, move or
+> history-split extraction. AI and plugins remain scheduled phases and render explicit
+> planned modules — never fake data. See [`docs/PLAN.md`](docs/PLAN.md).
 
 ![GRAFT repository workspace](docs/screenshots/repository.png)
 
@@ -51,6 +53,13 @@ window.
   CLI, with an add-to-projects step after cloning. Linked projects can fetch, pull
   and push, and stage-all, commit and create or switch branches with a confirmation
   step.
+- **Extract Studio**: point it at a repository to scan languages, manifests and the
+  Git branch without following symlinks or descending into caches. Analyze a folder
+  or file selection for internal references, incoming coupling, external packages and
+  cohesion, then build a pre-flight plan. Copy leaves the source untouched, move
+  verifies and backs up before removing originals, and history uses `git subtree
+  split` so component commits survive. Destructive strategies require a second
+  confirmation and every successful run is recorded locally.
 - **Notifications**: a persistent bell keeps pushes, pulls, checkouts, commits, file
   edits, forks and issues, and imports unread GitHub notifications from the website
   (mentions, reviews, issues, pull requests, workflow activity). Each item stays until

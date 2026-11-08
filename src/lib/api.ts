@@ -490,6 +490,133 @@ export type GitStatus = {
   error: string | null;
 };
 
+export type ExtractFile = {
+  path: string;
+  language: string;
+  bytes: number;
+  lines: number;
+};
+
+export type ExtractLanguageStat = {
+  language: string;
+  files: number;
+  bytes: number;
+  lines: number;
+};
+
+export type ExtractScan = {
+  source: string;
+  isGitRepo: boolean;
+  branch: string | null;
+  totalFiles: number;
+  totalBytes: number;
+  totalLines: number;
+  files: ExtractFile[];
+  truncated: boolean;
+  languages: ExtractLanguageStat[];
+  markers: string[];
+  warnings: string[];
+};
+
+export type ExtractComponent = {
+  path: string;
+  files: number;
+  bytes: number;
+  lines: number;
+  languages: string[];
+  internalReferences: number;
+  incomingReferences: number;
+  outgoingReferences: number;
+  externalDeps: number;
+  cohesion: number;
+  score: number;
+  hasManifest: boolean;
+};
+
+export type ExtractRef = {
+  from: string;
+  to: string;
+  specifier: string;
+  line: number;
+};
+
+export type ExternalDep = {
+  name: string;
+  files: number;
+};
+
+export type ExtractAnalysis = {
+  source: string;
+  fileCount: number;
+  totalBytes: number;
+  totalLines: number;
+  languages: ExtractLanguageStat[];
+  internalReferences: number;
+  incomingReferences: number;
+  outgoingReferences: number;
+  externalDeps: ExternalDep[];
+  cohesion: number;
+  files: ExtractFile[];
+  incoming: ExtractRef[];
+  warnings: string[];
+  scanWarnings: number;
+};
+
+export type ExtractAction = {
+  kind: string;
+  path: string;
+  detail: string;
+};
+
+export type ExtractCheck = {
+  id: string;
+  label: string;
+  ok: boolean;
+  detail: string;
+};
+
+export type ExtractPlan = {
+  source: string;
+  target: string;
+  name: string;
+  strategy: string;
+  fileCount: number;
+  totalBytes: number;
+  selection: string[];
+  actions: ExtractAction[];
+  warnings: string[];
+  checks: ExtractCheck[];
+  requiresBackup: boolean;
+  backupPath: string | null;
+  historyPrefix: string | null;
+};
+
+export type ExtractResult = {
+  ok: boolean;
+  strategy: string;
+  target: string;
+  fileCount: number;
+  totalBytes: number;
+  backupPath: string | null;
+  checks: ExtractCheck[];
+  message: string;
+  runId: number | null;
+};
+
+export type ExtractionRun = {
+  id: number;
+  source: string;
+  target: string;
+  name: string;
+  strategy: string;
+  fileCount: number;
+  totalBytes: number;
+  backupPath: string | null;
+  status: string;
+  message: string;
+  createdAt: number;
+};
+
 /** True when running inside the Tauri webview rather than a plain browser tab. */
 export const isDesktop =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -733,4 +860,34 @@ export const api = {
       branch,
       message,
     }),
+
+  extractScan: (source: string) => call<ExtractScan>("extract_scan", { source }),
+  extractSuggest: (source: string) =>
+    call<ExtractComponent[]>("extract_suggest", { source }),
+  extractAnalyze: (source: string, selection: string[]) =>
+    call<ExtractAnalysis>("extract_analyze", { source, selection }),
+  extractPlan: (
+    source: string,
+    selection: string[],
+    strategy: string,
+    target: string,
+    name: string,
+  ) => call<ExtractPlan>("extract_plan", { source, selection, strategy, target, name }),
+  extractExecute: (
+    source: string,
+    selection: string[],
+    strategy: string,
+    target: string,
+    name: string,
+    confirmed: boolean,
+  ) =>
+    call<ExtractResult>("extract_execute", {
+      source,
+      selection,
+      strategy,
+      target,
+      name,
+      confirmed,
+    }),
+  extractRuns: () => call<ExtractionRun[]>("extract_runs"),
 };

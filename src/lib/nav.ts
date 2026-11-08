@@ -146,7 +146,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: "extract",
     label: "Extract Studio",
     group: "Intelligence",
-    status: "planned",
+    status: "ready",
     phase: 4,
     summary: "Extract a component from a large repository into its own project.",
     bullets: [

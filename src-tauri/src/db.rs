@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 /// Bump together with a new file in `src/schema/` and a branch in `migrate`.
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 pub struct Db(pub Mutex<Connection>);
 
@@ -151,6 +151,11 @@ fn migrate(conn: &Connection) -> Result<(), String> {
     if current < 4 {
         conn.execute_batch(include_str!("schema/004_discovery.sql"))
             .map_err(|e| format!("migration 004 failed: {e}"))?;
+    }
+
+    if current < 5 {
+        conn.execute_batch(include_str!("schema/005_extract.sql"))
+            .map_err(|e| format!("migration 005 failed: {e}"))?;
     }
 
     conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
