@@ -238,11 +238,12 @@ directory, then removes the originals; **history** clones the repository and use
 `git subtree split --prefix` so the component directory's commits become an
 independent repository. Destructive strategies require a second confirmation. The
 Rust side rebuilds and re-checks the plan inside execute, and successful runs are
-recorded in `extraction_runs`.
+recorded in `extraction_runs`. A relationship graph in the view draws those recorded
+runs as source repository → extracted component links; it reads only the local run
+log and invents no nodes.
 
 Still to add: `git filter-repo` as an alternative history engine, fork/branch
-strategies and the cross-project relationship graph. Extract Studio therefore links
-completed extractions through its run log rather than a graph view.
+strategies and project-wide relationships beyond extraction runs.
 
 ---
 

@@ -29,6 +29,44 @@
     bytes: number;
   };
 
+  type GraphNode = {
+    path: string;
+    label: string;
+    role: "repo" | "component" | "both";
+    level: number;
+    x: number;
+    y: number;
+  };
+
+  type GraphEdge = {
+    id: number;
+    from: string;
+    to: string;
+    path: string;
+    fromLabel: string;
+    toLabel: string;
+    strategy: string;
+    labelX: number;
+    labelY: number;
+  };
+
+  type RelationshipGraph = {
+    nodes: GraphNode[];
+    edges: GraphEdge[];
+    width: number;
+    height: number;
+    totalRuns: number;
+    shownRuns: number;
+  };
+
+  const GRAPH_NODE_W = 182;
+  const GRAPH_NODE_H = 44;
+  const GRAPH_COL_GAP = 104;
+  const GRAPH_ROW_GAP = 12;
+  const GRAPH_PAD = 14;
+  const GRAPH_RUNS = 40;
+  const GRAPH_LEVELS = 6;
+
   const strategies: { id: ExtractStrategy; label: string; hint: string }[] = [
     {
       id: "copy",
@@ -107,6 +145,141 @@
   const strategy = $derived(strategies.find((entry) => entry.id === extract.strategy)!);
   const needsConfirmation = $derived(extract.strategy !== "copy");
 
+  const graph = $derived.by<RelationshipGraph>(() => {
+    const runs = extract.runs.slice(0, GRAPH_RUNS);
+    const nodes = new Map<
+      string,
+      { label: string; incoming: boolean; outgoing: boolean; level: number }
+    >();
+    if (runs.length === 0) {
+      return {
+        nodes: [],
+        edges: [],
+        width: 0,
+        height: 0,
+        totalRuns: extract.runs.length,
+        shownRuns: 0,
+      };
+    }
+
+    for (const run of runs) {
+      const source = nodes.get(run.source) ?? {
+        label: basename(run.source),
+        incoming: false,
+        outgoing: false,
+        level: 0,
+      };
+      source.outgoing = true;
+      nodes.set(run.source, source);
+
+      const target = nodes.get(run.target) ?? {
+        label: basename(run.target),
+        incoming: false,
+        outgoing: false,
+        level: 0,
+      };
+      target.incoming = true;
+      nodes.set(run.target, target);
+    }
+
+    const adjacency = new Map<string, string[]>();
+    const indegree = new Map<string, number>();
+    for (const path of nodes.keys()) {
+      adjacency.set(path, []);
+      indegree.set(path, 0);
+    }
+    for (const run of runs) {
+      adjacency.get(run.source)?.push(run.target);
+      indegree.set(run.target, (indegree.get(run.target) ?? 0) + 1);
+    }
+
+    const queue = [...nodes.keys()].filter((path) => (indegree.get(path) ?? 0) === 0);
+    while (queue.length > 0) {
+      const path = queue.shift()!;
+      const level = nodes.get(path)!.level;
+      for (const child of adjacency.get(path) ?? []) {
+        const node = nodes.get(child)!;
+        node.level = Math.max(node.level, level + 1);
+        const remaining = (indegree.get(child) ?? 1) - 1;
+        indegree.set(child, remaining);
+        if (remaining === 0) queue.push(child);
+      }
+    }
+
+    for (const node of nodes.values()) {
+      node.level = Math.min(node.level, GRAPH_LEVELS - 1);
+    }
+
+    const columns = Array.from({ length: GRAPH_LEVELS }, () => [] as string[]);
+    for (const [path, node] of nodes) columns[node.level].push(path);
+    for (const column of columns) column.sort((left, right) => left.localeCompare(right));
+
+    const rows = Math.max(1, ...columns.map((column) => column.length));
+    const levelCount = Math.max(
+      1,
+      columns.reduce((max, column, level) => (column.length > 0 ? level + 1 : max), 1),
+    );
+    const width = GRAPH_PAD * 2 + levelCount * GRAPH_NODE_W + (levelCount - 1) * GRAPH_COL_GAP;
+    const height = GRAPH_PAD * 2 + rows * GRAPH_NODE_H + (rows - 1) * GRAPH_ROW_GAP;
+
+    const placed = new Map<string, GraphNode>();
+    const result: GraphNode[] = [];
+    columns.forEach((column, level) => {
+      const columnHeight = column.length * GRAPH_NODE_H + (column.length - 1) * GRAPH_ROW_GAP;
+      const top = GRAPH_PAD + Math.max(0, (height - GRAPH_PAD * 2 - columnHeight) / 2);
+      column.forEach((path, index) => {
+        const node = nodes.get(path)!;
+        const entry: GraphNode = {
+          path,
+          label: node.label,
+          role:
+            node.incoming && node.outgoing
+              ? "both"
+              : node.incoming
+                ? "component"
+                : "repo",
+          level,
+          x: GRAPH_PAD + level * (GRAPH_NODE_W + GRAPH_COL_GAP),
+          y: top + index * (GRAPH_NODE_H + GRAPH_ROW_GAP),
+        };
+        placed.set(path, entry);
+        result.push(entry);
+      });
+    });
+
+    const edges = runs.map((run) => {
+      const from = placed.get(run.source)!;
+      const to = placed.get(run.target)!;
+      const x1 = from.x + GRAPH_NODE_W;
+      const y1 = from.y + GRAPH_NODE_H / 2;
+      const x2 = to.x;
+      const y2 = to.y + GRAPH_NODE_H / 2;
+      const bend = Math.max(26, Math.abs(x2 - x1) / 2);
+      const c1x = x1 + (x2 >= x1 ? bend : bend);
+      const c2x = x2 - (x2 >= x1 ? bend : bend);
+      return {
+        id: run.id,
+        from: run.source,
+        to: run.target,
+        path: `M ${x1} ${y1} C ${c1x} ${y1}, ${c2x} ${y2}, ${x2} ${y2}`,
+        fromLabel: from.label,
+        toLabel: to.label,
+        strategy: run.strategy,
+        labelX: (x1 + 3 * c1x + 3 * c2x + x2) / 8,
+        labelY: (y1 + 3 * y1 + 3 * y2 + y2) / 8,
+      };
+    });
+
+    return {
+      nodes: result,
+      edges,
+      width,
+      height,
+      totalRuns: extract.runs.length,
+      shownRuns: runs.length,
+    };
+  });
+
   onMount(() => {
     void loadRuns();
   });
@@ -120,6 +293,12 @@
     if (count < 1024 * 1024) return `${(count / 1024).toFixed(1)} kB`;
     if (count < 1024 * 1024 * 1024) return `${(count / (1024 * 1024)).toFixed(1)} MB`;
     return `${(count / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  }
+
+  function basename(path: string): string {
+    const parts = path.split("/").filter(Boolean);
+    const label = parts[parts.length - 1] ?? path;
+    return label.length > 24 ? `${label.slice(0, 23)}…` : label;
   }
 
   function percent(value: number): string {
@@ -690,6 +869,88 @@
     {/if}
   {/if}
 
+  <div class="panel graph-panel">
+    <div class="cell-head">
+      <div>
+        <span class="mono-label">relationship graph</span>
+        <p class="cell-sub">
+          Source repositories and the components extracted from them. Built from recorded runs;
+          nothing is inferred or fetched.
+        </p>
+      </div>
+      <span class="mono faint">
+        {plural(graph.nodes.length, "node")} · {plural(graph.edges.length, "link")}
+      </span>
+    </div>
+    {#if graph.nodes.length === 0}
+      <p class="state">
+        No relationships yet. A successful extraction links its source repository to the new
+        component here.
+      </p>
+    {:else}
+      <div class="graph-scroll">
+        <svg
+          class="graph"
+          width={graph.width}
+          height={graph.height}
+          viewBox={`0 0 ${graph.width} ${graph.height}`}
+          role="img"
+          aria-label="Project relationship graph"
+        >
+          <defs>
+            <marker
+              id="extract-graph-arrow"
+              viewBox="0 0 8 8"
+              refX="7"
+              refY="4"
+              markerWidth="7"
+              markerHeight="7"
+              orient="auto-start-reverse"
+            >
+              <path class="arrow" d="M 0 0 L 8 4 L 0 8 z" />
+            </marker>
+          </defs>
+          {#each graph.edges as edge (edge.id)}
+            <path class="graph-edge" d={edge.path} marker-end="url(#extract-graph-arrow)">
+              <title>{edge.fromLabel} → {edge.toLabel} · {edge.strategy}</title>
+            </path>
+            {#if graph.edges.length <= 12}
+              <text class="edge-label" x={edge.labelX} y={edge.labelY}>{edge.strategy}</text>
+            {/if}
+          {/each}
+          {#each graph.nodes as node (node.path)}
+            <g class="graph-node">
+              <title>{node.path}</title>
+              <rect
+                class="node-box"
+                class:component={node.role === "component"}
+                class:both={node.role === "both"}
+                x={node.x}
+                y={node.y}
+                width={GRAPH_NODE_W}
+                height={GRAPH_NODE_H}
+                rx="4"
+              />
+              <text class="node-name" x={node.x + 11} y={node.y + 18}>{node.label}</text>
+              <text class="node-role" x={node.x + 11} y={node.y + 32}>
+                {node.role === "repo"
+                  ? "source repository"
+                  : node.role === "component"
+                    ? "extracted component"
+                    : "repository + component"}
+              </text>
+            </g>
+          {/each}
+        </svg>
+      </div>
+      <p class="graph-note mono faint">
+        Latest {plural(graph.shownRuns, "run")}{graph.totalRuns > graph.shownRuns
+          ? ` of ${graph.totalRuns}`
+          : ""}. Arrow direction follows source → extraction target.
+      </p>
+    {/if}
+  </div>
+
   <div class="panel runs-panel">
     <div class="cell-head">
       <div>
@@ -860,6 +1121,7 @@
   .analysis-panel,
   .plan-panel,
   .result-panel,
+  .graph-panel,
   .runs-panel {
     padding: 12px 13px;
   }
@@ -1423,6 +1685,69 @@
   .run-list {
     display: grid;
     gap: 3px;
+  }
+
+  .graph-scroll {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+  }
+
+  .graph {
+    display: block;
+    min-width: 100%;
+    height: auto;
+  }
+
+  .graph-edge {
+    fill: none;
+    stroke: var(--border-strong);
+    stroke-width: 1.2;
+  }
+
+  .arrow {
+    fill: var(--border-strong);
+  }
+
+  .edge-label {
+    fill: var(--text-faint);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    text-anchor: middle;
+    paint-order: stroke;
+    stroke: var(--bg-elev);
+    stroke-width: 3px;
+  }
+
+  .node-box {
+    fill: var(--surface);
+    stroke: var(--border-strong);
+  }
+
+  .node-box.component {
+    stroke: var(--accent);
+  }
+
+  .node-box.both {
+    stroke: var(--warn);
+  }
+
+  .node-name {
+    fill: var(--text);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .node-role {
+    fill: var(--text-faint);
+    font-family: var(--font-mono);
+    font-size: 9px;
+  }
+
+  .graph-note {
+    margin: 7px 0 0;
+    font-size: 10px;
   }
 
   .run-row {

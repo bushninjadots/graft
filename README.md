@@ -59,7 +59,8 @@ window.
   cohesion, then build a pre-flight plan. Copy leaves the source untouched, move
   verifies and backs up before removing originals, and history uses `git subtree
   split` so component commits survive. Destructive strategies require a second
-  confirmation and every successful run is recorded locally.
+  confirmation and every successful run is recorded locally. Those runs also draw a
+  source → component relationship graph, built only from the local run log.
 - **Notifications**: a persistent bell keeps pushes, pulls, checkouts, commits, file
   edits, forks and issues, and imports unread GitHub notifications from the website
   (mentions, reviews, issues, pull requests, workflow activity). Each item stays until
