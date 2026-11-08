@@ -4,7 +4,7 @@ import {
   type GithubRepo,
   type GithubUser,
 } from "../api";
-import { notify } from "./ui.svelte";
+import { navigate, notify } from "./ui.svelte";
 
 type GithubState = {
   loading: boolean;
@@ -16,6 +16,7 @@ type GithubState = {
   page: number;
   hasMore: boolean;
   filter: string;
+  selected: GithubRepo | null;
 };
 
 export const github = $state<GithubState>({
@@ -28,6 +29,7 @@ export const github = $state<GithubState>({
   page: 1,
   hasMore: false,
   filter: "",
+  selected: null,
 });
 
 function message(cause: unknown): string {
@@ -41,6 +43,16 @@ export function githubUser(): GithubUser | null {
 
 export function isSignedIn(): boolean {
   return github.status?.signedIn ?? false;
+}
+
+/** Opens the repository detail surface for `repo`. */
+export function openRepo(repo: GithubRepo): void {
+  github.selected = repo;
+  navigate("repository");
+}
+
+export function closeRepo(): void {
+  navigate("repositories");
 }
 
 export async function loadGithub(): Promise<void> {

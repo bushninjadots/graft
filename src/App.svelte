@@ -8,6 +8,7 @@
   import Home from "./views/Home.svelte";
   import Projects from "./views/Projects.svelte";
   import Repositories from "./views/Repositories.svelte";
+  import Repository from "./views/Repository.svelte";
   import SettingsView from "./views/Settings.svelte";
   import ModuleView from "./views/ModuleView.svelte";
   import { navById } from "./lib/nav";
@@ -18,7 +19,9 @@
   import { boot, refreshTools, session } from "./lib/state/session.svelte";
   import { loadGithub } from "./lib/state/github.svelte";
 
-  const active = $derived(navById(ui.view) ?? navById("home")!);
+  const active = $derived(
+    navById(ui.view === "repository" ? "repositories" : ui.view) ?? navById("home")!,
+  );
 
   onMount(() => {
     applyAppearance();
@@ -87,6 +90,8 @@
             <Projects />
           {:else if ui.view === "repositories"}
             <Repositories />
+          {:else if ui.view === "repository"}
+            <Repository />
           {:else if ui.view === "settings"}
             <SettingsView />
           {:else}

@@ -8,10 +8,13 @@ It is a native desktop instrument (Tauri 2 + Rust + Svelte 5), not a website in 
 window.
 
 > Status: **Phase 1 — GitHub**. Real OAuth device-flow sign-in with the token kept in
-> the system keyring, a live repository list, and detected Git state for local
-> projects. Terminal, Git write operations, code review, Watchtower, Extract Studio,
-> AI and plugins remain scheduled phases and render explicit planned modules — never
-> fake data. See [`docs/PLAN.md`](docs/PLAN.md).
+> the system keyring, a live repository list, an in-app repository workspace (README,
+> code, commits with diffs, pull requests, branches), star/fork/clone, and Git actions
+> for local projects. Terminal, commit/branch writes, code review, Watchtower, Extract
+> Studio, AI and plugins remain scheduled phases and render explicit planned modules —
+> never fake data. See [`docs/PLAN.md`](docs/PLAN.md).
+
+![GRAFT repository workspace](docs/screenshots/repository.png)
 
 ## What works today
 
@@ -21,6 +24,13 @@ window.
 - **Repositories**: public and private repositories from the GitHub REST API, with
   filter, pagination, language, stars, visibility and archived state. Links open in
   your browser; GRAFT never embeds a GitHub webpage.
+- **Repository workspace**: README, directory tree, file text, branches, commit
+  history with diffs, and pull requests with their descriptions and file diffs —
+  read inside GRAFT instead of a browser tab.
+- **Actions**: star/unstar, fork, and clone/download through the Git CLI, with an
+  add-to-projects step after cloning. Linked projects can fetch, pull and push.
+- Markdown is rendered and sanitized locally (marked + DOMPurify); README links
+  still open in your browser.
 - **My Projects**: create and remove project records, validate directories in Rust,
   and read real Git state for each linked directory — branch, change count,
   ahead/behind, remote and GitHub slug. A Detect action fills the name and previews
@@ -38,7 +48,7 @@ window.
 | ----- | ------ |
 | Shell | Tauri 2 |
 | Engine | Rust 2021 — rusqlite (bundled SQLite), reqwest, keyring, serde |
-| UI | Svelte 5 runes + TypeScript |
+| UI | Svelte 5 runes + TypeScript (marked + DOMPurify for Markdown) |
 | Build | Vite 7, npm |
 | Design | CSS token system driven by the theme engine |
 
@@ -76,7 +86,7 @@ npm run check          # svelte-check: TypeScript + template diagnostics
 npm run build          # production frontend bundle
 npm run check:rust     # cargo check
 npm run verify         # all three
-cargo test --manifest-path src-tauri/Cargo.toml   # 7 unit tests
+cargo test --manifest-path src-tauri/Cargo.toml   # unit tests
 ```
 
 `npm run dev` alone serves the UI in a browser. The Rust backend is absent there by
@@ -98,7 +108,7 @@ before it is stored.
 
 ```
 src/                  Svelte 5 interface
-  views/              Home, Projects, Repositories, Settings, ModuleView
+  views/              Home, Projects, Repositories, Repository, Settings, ModuleView
   lib/components/     shell, palette and dashboard panels
   lib/state/          reactive state (appearance, nav, dashboard, github, session, ui)
   lib/api.ts          the only IPC surface
@@ -114,9 +124,12 @@ scripts/              icon rendering
 - Secrets: GitHub tokens live in the system keyring (`dev.graft.desktop` service).
   They are never written to SQLite, logs, localStorage or the webview.
 - Network: all GitHub requests are made by Rust. The webview CSP allows no external
-  connections and only avatar images from `avatars.githubusercontent.com`.
+  connections and images only from GitHub's avatar, raw and camo hosts.
 - External links: `open_external` accepts `http(s)` only.
-- Local Git access is read-only inspection of directories you explicitly link.
+- Local Git access is inspection of directories you explicitly link, plus the
+  fetch/pull/push actions you trigger. Cloning only writes to the destination you
+  confirm, and refuses to overwrite an existing folder.
+- Markdown from GitHub is sanitized with DOMPurify before it reaches the DOM.
 
 ## Documentation
 

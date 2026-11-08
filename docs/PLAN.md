@@ -9,8 +9,11 @@ Architecture: `docs/ARCHITECTURE.md`. Visual system: `docs/DESIGN.md`.
 
 ## Current status
 
-**Phase 1 — GitHub: auth, repositories and local Git inspection complete.**
-Phase 0 (foundation) is complete and verified as well.
+**Phase 1 — GitHub: auth, repository workspace and local Git actions complete.**
+Phase 1a added auth, the repository list and local Git inspection. Phase 1b added the
+in-app repository workspace (README, code tree, commits with diffs, pull requests,
+branches), star/fork/clone, and fetch/pull/push for linked projects. Phase 0
+(foundation) is complete and verified as well.
 
 Delivered in Phase 1a:
 
@@ -23,22 +26,28 @@ Delivered in Phase 1a:
 | 5 | Account panel fed by the real API, with cached profile | done |
 | 6 | Local project Git state (branch, changes, ahead/behind, remote) | done |
 | 7 | GitHub settings (client ID, status, sign out) | done |
-| 8 | Terminal, Git write operations, repository detail | next (Phase 1b) |
+| 8 | Repository workspace: README, file tree, file text, branches | done |
+| 9 | Commit history with per-file diffs | done |
+| 10 | Pull requests with body and file diffs | done |
+| 11 | Star/unstar, fork, clone/download, clone-to-project | done |
+| 12 | Local project fetch / pull / push | done |
+| 13 | Terminal, commit and branch write operations | next (Phase 1b) |
 
-Still planned: repository detail (README, branches, commits), Git workspace writes,
-terminal, ETag caching, rate-limit surfacing beyond error messages.
+Still planned: terminal, commit/branch write operations (with confirmation), ETag
+caching, rate-limit surfacing beyond error messages, issues and releases.
 
 ### Verification (Phase 1a)
 
 | Check | Result |
 | ----- | ------ |
 | `svelte-check` | 0 errors, 0 warnings |
-| `vite build` | passes — 142 kB JS / 36 kB CSS |
+| `vite build` | passes — 248 kB JS / 45 kB CSS (marked + DOMPurify included) |
 | `cargo check` | passes |
-| `cargo test` | 7/7 pass (migrations, settings, projects, Git parsing, device-flow responses) |
+| `cargo test` | 8/8 pass (migrations, settings, projects, Git parsing, device flow, HTTP client) |
+| Repository API | verified live with a real token: repository list, detail, README, branches and commit list all rendered in the running window |
 | Keyring round-trip | verified against the live Secret Service on this machine |
 | Visual review | running window captured with `grim`; Repositories sign-in flow inspected |
-| Live GitHub calls | not exercised end to end — no OAuth client ID is configured yet |
+| Live GitHub calls | verified end to end by seeding the existing `gh` token into the keyring; device flow itself still needs a client ID |
 
 Delivered in this milestone:
 
@@ -151,8 +160,10 @@ SQLite, optional background worker behind a setting (default off).
 ## Phase 3 — Advanced GitHub
 
 Pull requests, reviews and inline comments, issues, branch graph, side-by-side diff,
-Explore/Collections with saved searches, Profile Studio with Markdown preview and
-opt-in push to the profile README repository.
+Explore/Collections with saved searches, Profile Studio with Markdown preview and a
+choice between an app-only draft and publishing to the GitHub profile README
+repository. Publishing is always explicit; the draft never leaves the machine
+unless the user chooses to sync it.
 
 ---
 

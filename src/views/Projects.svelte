@@ -19,6 +19,8 @@
   let gitStates = $state<Record<number, GitStatus | "loading">>({});
   let detecting = $state(false);
   let detected = $state<GitStatus | null>(null);
+  let gitBusy = $state<Record<number, "fetch" | "pull" | "push" | null>>({});
+  const gitVerbs = ["fetch", "pull", "push"] as const;
 
   async function load(): Promise<void> {
     loading = true;
@@ -113,6 +115,25 @@
       }
     } finally {
       detecting = false;
+    }
+  }
+
+  async function runGit(project: Project, action: "fetch" | "pull" | "push"): Promise<void> {
+    if (gitBusy[project.id]) return;
+    gitBusy = { ...gitBusy, [project.id]: action };
+    try {
+      const result = await api.gitAction(project.path, action);
+      const detail = (result.ok ? result.output : (result.error ?? result.output))
+        .split("\n")
+        .map((line) => line.trim())
+        .find(Boolean);
+      notify(
+        `${action} · ${project.name}${detail ? ` — ${detail}` : ""}`,
+        result.ok ? "ok" : "danger",
+      );
+      await refreshGit();
+    } finally {
+      gitBusy = { ...gitBusy, [project.id]: null };
     }
   }
 
@@ -275,6 +296,20 @@
             {/if}
           </div>
           <div class="actions">
+            {#if gitInfo(project.id)?.isRepo}
+              <div class="git-actions">
+                {#each gitVerbs as verb}
+                  <button
+                    class="btn ghost git-btn"
+                    title={`git ${verb}`}
+                    disabled={!!gitBusy[project.id]}
+                    onclick={() => runGit(project, verb)}
+                  >
+                    {gitBusy[project.id] === verb ? "…" : verb}
+                  </button>
+                {/each}
+              </div>
+            {/if}
             {#if confirmId === project.id}
               <span class="confirm mono-label">delete?</span>
               <button class="btn danger" onclick={() => remove(project.id)}>Confirm</button>
@@ -551,7 +586,22 @@
   .actions {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
     gap: 5px;
+  }
+
+  .git-actions {
+    display: flex;
+    gap: 3px;
+  }
+
+  .git-btn {
+    height: 20px;
+    padding: 0 6px;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
   }
 
   .btn.danger {

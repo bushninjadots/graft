@@ -3,6 +3,7 @@
 
 use crate::db::{Db, now};
 use crate::secrets;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::State;
@@ -483,6 +484,774 @@ pub async fn github_list_repos(db: State<'_, Db>, page: u32) -> Result<RepoPage,
     })
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoOwnerInfo {
+    pub login: String,
+    #[serde(default)]
+    pub avatar_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoLicense {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub spdx_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RepoDetail {
+    pub id: u64,
+    pub name: String,
+    pub full_name: String,
+    #[serde(default)]
+    pub private: bool,
+    #[serde(default)]
+    pub fork: bool,
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub stargazers_count: u32,
+    #[serde(default)]
+    pub watchers_count: u32,
+    #[serde(default)]
+    pub forks_count: u32,
+    #[serde(default)]
+    pub open_issues_count: u32,
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub topics: Vec<String>,
+    #[serde(default = "default_branch")]
+    pub default_branch: String,
+    pub html_url: String,
+    #[serde(default)]
+    pub clone_url: String,
+    #[serde(default)]
+    pub ssh_url: String,
+    #[serde(default)]
+    pub pushed_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: String,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub license: Option<RepoLicense>,
+    #[serde(default)]
+    pub owner: Option<RepoOwnerInfo>,
+    #[serde(default, skip_deserializing)]
+    pub starred: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RepoEntry {
+    pub name: String,
+    pub path: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub sha: String,
+    #[serde(default)]
+    pub html_url: Option<String>,
+    #[serde(default)]
+    pub download_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoFile {
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    pub sha: String,
+    pub html_url: String,
+    pub content: Option<String>,
+    pub truncated: bool,
+    pub binary: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RepoBranch {
+    pub name: String,
+    #[serde(default)]
+    pub protected: bool,
+    #[serde(skip_deserializing, default)]
+    pub sha: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoCommit {
+    pub sha: String,
+    pub short: String,
+    pub message: String,
+    pub author_name: String,
+    pub author_login: Option<String>,
+    pub author_avatar: Option<String>,
+    pub date: Option<String>,
+    pub html_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RepoCommitFile {
+    pub filename: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub additions: u64,
+    #[serde(default)]
+    pub deletions: u64,
+    #[serde(default)]
+    pub changes: u64,
+    #[serde(default)]
+    pub patch: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoCommitDetail {
+    pub sha: String,
+    pub message: String,
+    pub author_name: String,
+    pub author_login: Option<String>,
+    pub author_avatar: Option<String>,
+    pub date: Option<String>,
+    pub additions: u64,
+    pub deletions: u64,
+    pub html_url: String,
+    pub files: Vec<RepoCommitFile>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoPull {
+    pub number: u64,
+    pub title: String,
+    pub state: String,
+    pub draft: bool,
+    pub merged: bool,
+    pub author_login: String,
+    pub author_avatar: String,
+    pub body: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub comments: u32,
+    pub additions: u64,
+    pub deletions: u64,
+    pub changed_files: u64,
+    pub head_ref: String,
+    pub base_ref: String,
+    pub html_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RepoPullFile {
+    pub filename: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub additions: u64,
+    #[serde(default)]
+    pub deletions: u64,
+    #[serde(default)]
+    pub patch: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoPullDetail {
+    pub pull: RepoPull,
+    pub files: Vec<RepoPullFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ForkResult {
+    pub full_name: String,
+    pub html_url: String,
+    #[serde(default)]
+    pub clone_url: String,
+}
+
+fn token() -> Result<String, String> {
+    secrets::load()?.ok_or_else(|| "Sign in to GitHub first.".to_string())
+}
+
+fn coords(owner: &str, repo: &str) -> Result<(String, String), String> {
+    let valid = |value: &str| {
+        (1..=120).contains(&value.len())
+            && value
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    if valid(owner.trim()) && valid(repo.trim()) {
+        Ok((owner.trim().to_string(), repo.trim().to_string()))
+    } else {
+        Err("Invalid repository reference.".to_string())
+    }
+}
+
+fn encode_segment(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+fn encode_path(path: &str) -> String {
+    path.split('/')
+        .map(encode_segment)
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+async fn get_json(token: &str, url: &str) -> Result<serde_json::Value, String> {
+    let response = api_get(token, url).await?;
+    response
+        .json()
+        .await
+        .map_err(|e| format!("GitHub returned an unreadable response: {e}"))
+}
+
+async fn get_optional(token: &str, url: &str) -> Result<Option<serde_json::Value>, String> {
+    let response = client()?
+        .get(url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", API_VERSION)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("Cannot reach api.github.com: {e}"))?;
+
+    if response.status().as_u16() == 404 {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        return Err(describe_error(response).await);
+    }
+    Ok(Some(
+        response
+            .json()
+            .await
+            .map_err(|e| format!("GitHub returned an unreadable response: {e}"))?,
+    ))
+}
+
+fn decode_base64(value: &str) -> Option<Vec<u8>> {
+    let compact: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+    BASE64.decode(compact).ok()
+}
+
+fn file_from_value(value: &serde_json::Value) -> RepoFile {
+    let name = value
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let path = value
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let size = value.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+    let sha = value
+        .get("sha")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let html_url = value
+        .get("html_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let mut truncated = false;
+    let mut binary = false;
+    let mut content = None;
+
+    if let Some(encoded) = value.get("content").and_then(|v| v.as_str()) {
+        if size > 512_000 {
+            truncated = true;
+        } else if let Some(bytes) = decode_base64(encoded) {
+            if bytes.iter().take(8000).any(|byte| *byte == 0) {
+                binary = true;
+            } else {
+                match String::from_utf8(bytes) {
+                    Ok(text) => content = Some(text),
+                    Err(_) => binary = true,
+                }
+            }
+        } else {
+            binary = true;
+        }
+    }
+
+    RepoFile {
+        name,
+        path,
+        size,
+        sha,
+        html_url,
+        content,
+        truncated,
+        binary,
+    }
+}
+
+async fn starred(token: &str, owner: &str, repo: &str) -> Result<bool, String> {
+    let response = client()?
+        .get(format!("{API}/user/starred/{owner}/{repo}"))
+        .header("X-GitHub-Api-Version", API_VERSION)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("Cannot reach api.github.com: {e}"))?;
+    Ok(response.status().is_success())
+}
+
+#[tauri::command]
+pub async fn github_repo_detail(owner: String, repo: String) -> Result<RepoDetail, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    let mut detail: RepoDetail =
+        serde_json::from_value(get_json(&token, &format!("{API}/repos/{owner}/{repo}")).await?)
+            .map_err(|e| format!("GitHub returned an unreadable repository: {e}"))?;
+    detail.starred = starred(&token, &owner, &repo).await.unwrap_or(false);
+    Ok(detail)
+}
+
+#[tauri::command]
+pub async fn github_repo_readme(owner: String, repo: String) -> Result<Option<RepoFile>, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    let value = get_optional(&token, &format!("{API}/repos/{owner}/{repo}/readme")).await?;
+    Ok(value.as_ref().map(file_from_value))
+}
+
+#[tauri::command]
+pub async fn github_repo_contents(
+    owner: String,
+    repo: String,
+    path: Option<String>,
+    git_ref: Option<String>,
+) -> Result<Vec<RepoEntry>, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    let clean = path.unwrap_or_default();
+    let clean = clean.trim_matches('/');
+    let mut url = format!("{API}/repos/{owner}/{repo}/contents");
+    if !clean.is_empty() {
+        url.push('/');
+        url.push_str(&encode_path(clean));
+    }
+    if let Some(git_ref) = git_ref.filter(|value| !value.trim().is_empty()) {
+        url.push_str(&format!("?ref={}", encode_segment(git_ref.trim())));
+    }
+
+    let value = get_json(&token, &url).await?;
+    if value.is_array() {
+        let mut entries: Vec<RepoEntry> = serde_json::from_value(value)
+            .map_err(|e| format!("GitHub returned an unreadable directory: {e}"))?;
+        entries.sort_by(|a, b| {
+            let kind = |entry: &RepoEntry| entry.kind != "dir";
+            kind(a).cmp(&kind(b)).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        Ok(entries)
+    } else {
+        let entry: RepoEntry = serde_json::from_value(value)
+            .map_err(|e| format!("GitHub returned an unreadable entry: {e}"))?;
+        Ok(vec![entry])
+    }
+}
+
+#[tauri::command]
+pub async fn github_repo_file(
+    owner: String,
+    repo: String,
+    path: String,
+    git_ref: Option<String>,
+) -> Result<RepoFile, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    let clean = path.trim().trim_matches('/');
+    if clean.is_empty() {
+        return Err("Choose a file to read.".to_string());
+    }
+    let mut url = format!("{API}/repos/{owner}/{repo}/contents/{}", encode_path(clean));
+    if let Some(git_ref) = git_ref.filter(|value| !value.trim().is_empty()) {
+        url.push_str(&format!("?ref={}", encode_segment(git_ref.trim())));
+    }
+    let value = get_json(&token, &url).await?;
+    Ok(file_from_value(&value))
+}
+
+#[tauri::command]
+pub async fn github_repo_branches(owner: String, repo: String) -> Result<Vec<RepoBranch>, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+
+    #[derive(Deserialize)]
+    struct RawBranch {
+        name: String,
+        #[serde(default)]
+        protected: bool,
+        commit: RawCommit,
+    }
+    #[derive(Deserialize)]
+    struct RawCommit {
+        sha: String,
+    }
+
+    let value = get_json(
+        &token,
+        &format!("{API}/repos/{owner}/{repo}/branches?per_page=100"),
+    )
+    .await?;
+    let raw: Vec<RawBranch> = serde_json::from_value(value)
+        .map_err(|e| format!("GitHub returned an unreadable branch list: {e}"))?;
+    Ok(raw
+        .into_iter()
+        .map(|branch| RepoBranch {
+            name: branch.name,
+            protected: branch.protected,
+            sha: branch.commit.sha,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn github_repo_commits(
+    owner: String,
+    repo: String,
+    git_ref: Option<String>,
+    page: u32,
+) -> Result<Vec<RepoCommit>, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    let page = page.clamp(1, 20);
+
+    #[derive(Deserialize)]
+    struct RawCommitEntry {
+        sha: String,
+        #[serde(default)]
+        html_url: String,
+        commit: RawCommitInfo,
+        #[serde(default)]
+        author: Option<RawUser>,
+    }
+    #[derive(Deserialize)]
+    struct RawCommitInfo {
+        message: String,
+        #[serde(default)]
+        author: Option<RawAuthor>,
+    }
+    #[derive(Deserialize)]
+    struct RawAuthor {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        date: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct RawUser {
+        login: String,
+        #[serde(default)]
+        avatar_url: String,
+    }
+
+    let mut url = format!(
+        "{API}/repos/{owner}/{repo}/commits?per_page=40&page={page}"
+    );
+    if let Some(git_ref) = git_ref.filter(|value| !value.trim().is_empty()) {
+        url.push_str(&format!("&sha={}", encode_segment(git_ref.trim())));
+    }
+
+    let value = get_json(&token, &url).await?;
+    let raw: Vec<RawCommitEntry> = serde_json::from_value(value)
+        .map_err(|e| format!("GitHub returned an unreadable commit list: {e}"))?;
+    Ok(raw
+        .into_iter()
+        .map(|entry| RepoCommit {
+            short: entry.sha.chars().take(7).collect(),
+            sha: entry.sha,
+            message: entry.commit.message.lines().next().unwrap_or("").to_string(),
+            author_name: entry
+                .commit
+                .author
+                .as_ref()
+                .map(|author| author.name.clone())
+                .unwrap_or_else(|| "unknown".to_string()),
+            date: entry.commit.author.and_then(|author| author.date),
+            author_login: entry.author.as_ref().map(|user| user.login.clone()),
+            author_avatar: entry.author.map(|user| user.avatar_url),
+            html_url: entry.html_url,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn github_repo_commit(
+    owner: String,
+    repo: String,
+    sha: String,
+) -> Result<RepoCommitDetail, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    if sha.trim().len() < 7 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Invalid commit reference.".to_string());
+    }
+
+    #[derive(Deserialize)]
+    struct RawDetail {
+        sha: String,
+        #[serde(default)]
+        html_url: String,
+        commit: RawInfo,
+        #[serde(default)]
+        author: Option<RawUser>,
+        #[serde(default)]
+        stats: RawStats,
+        #[serde(default)]
+        files: Vec<RepoCommitFile>,
+    }
+    #[derive(Deserialize)]
+    struct RawInfo {
+        message: String,
+        #[serde(default)]
+        author: Option<RawAuthor>,
+    }
+    #[derive(Deserialize)]
+    struct RawAuthor {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        date: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct RawUser {
+        login: String,
+        #[serde(default)]
+        avatar_url: String,
+    }
+    #[derive(Deserialize, Default)]
+    struct RawStats {
+        #[serde(default)]
+        additions: u64,
+        #[serde(default)]
+        deletions: u64,
+    }
+
+    let value = get_json(
+        &token,
+        &format!("{API}/repos/{owner}/{repo}/commits/{sha}"),
+    )
+    .await?;
+    let raw: RawDetail = serde_json::from_value(value)
+        .map_err(|e| format!("GitHub returned an unreadable commit: {e}"))?;
+    Ok(RepoCommitDetail {
+        sha: raw.sha,
+        message: raw.commit.message,
+        author_name: raw
+            .commit
+            .author
+            .as_ref()
+            .map(|author| author.name.clone())
+            .unwrap_or_else(|| "unknown".to_string()),
+        date: raw.commit.author.and_then(|author| author.date),
+        author_login: raw.author.as_ref().map(|user| user.login.clone()),
+        author_avatar: raw.author.map(|user| user.avatar_url),
+        additions: raw.stats.additions,
+        deletions: raw.stats.deletions,
+        html_url: raw.html_url,
+        files: raw.files,
+    })
+}
+
+fn pull_from_value(value: &serde_json::Value) -> RepoPull {
+    RepoPull {
+        number: value.get("number").and_then(|v| v.as_u64()).unwrap_or(0),
+        title: value
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        state: value
+            .get("state")
+            .and_then(|v| v.as_str())
+            .unwrap_or("open")
+            .to_string(),
+        draft: value.get("draft").and_then(|v| v.as_bool()).unwrap_or(false),
+        merged: value.get("merged_at").map(|v| !v.is_null()).unwrap_or(false),
+        author_login: value
+            .pointer("/user/login")
+            .and_then(|v| v.as_str())
+            .unwrap_or("ghost")
+            .to_string(),
+        author_avatar: value
+            .pointer("/user/avatar_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        body: value
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        created_at: value
+            .get("created_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        updated_at: value
+            .get("updated_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        comments: value.get("comments").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        additions: value.get("additions").and_then(|v| v.as_u64()).unwrap_or(0),
+        deletions: value.get("deletions").and_then(|v| v.as_u64()).unwrap_or(0),
+        changed_files: value
+            .get("changed_files")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        head_ref: value
+            .pointer("/head/ref")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string(),
+        base_ref: value
+            .pointer("/base/ref")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string(),
+        html_url: value
+            .get("html_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    }
+}
+
+#[tauri::command]
+pub async fn github_repo_pulls(
+    owner: String,
+    repo: String,
+    state: String,
+) -> Result<Vec<RepoPull>, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    let state = match state.as_str() {
+        "closed" | "all" | "open" => state,
+        _ => "open".to_string(),
+    };
+    let value = get_json(
+        &token,
+        &format!(
+            "{API}/repos/{owner}/{repo}/pulls?state={state}&per_page=50&sort=updated&direction=desc"
+        ),
+    )
+    .await?;
+    let list = value
+        .as_array()
+        .ok_or_else(|| "GitHub returned an unexpected pull request list.".to_string())?;
+    Ok(list.iter().map(pull_from_value).collect())
+}
+
+#[tauri::command]
+pub async fn github_repo_pull(
+    owner: String,
+    repo: String,
+    number: u64,
+) -> Result<RepoPullDetail, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    let pull_value = get_json(
+        &token,
+        &format!("{API}/repos/{owner}/{repo}/pulls/{number}"),
+    )
+    .await?;
+    let files_value = get_json(
+        &token,
+        &format!("{API}/repos/{owner}/{repo}/pulls/{number}/files?per_page=100"),
+    )
+    .await?;
+    let files: Vec<RepoPullFile> = serde_json::from_value(files_value)
+        .map_err(|e| format!("GitHub returned unreadable pull request files: {e}"))?;
+    Ok(RepoPullDetail {
+        pull: pull_from_value(&pull_value),
+        files,
+    })
+}
+
+#[tauri::command]
+pub async fn github_fork(owner: String, repo: String) -> Result<ForkResult, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    let response = client()?
+        .post(format!("{API}/repos/{owner}/{repo}/forks"))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", API_VERSION)
+        .header("Content-Length", "0")
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| format!("Cannot reach api.github.com: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(describe_error(response).await);
+    }
+    response
+        .json()
+        .await
+        .map_err(|e| format!("GitHub returned an unreadable fork response: {e}"))
+}
+
+#[tauri::command]
+pub async fn github_set_star(
+    owner: String,
+    repo: String,
+    starred: bool,
+) -> Result<bool, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    let url = format!("{API}/user/starred/{owner}/{repo}");
+    let builder = if starred {
+        client()?.put(url)
+    } else {
+        client()?.delete(url)
+    };
+    let response = builder
+        .header("X-GitHub-Api-Version", API_VERSION)
+        .header("Content-Length", "0")
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| format!("Cannot reach api.github.com: {e}"))?;
+
+    if response.status().is_success() {
+        Ok(starred)
+    } else {
+        Err(describe_error(response).await)
+    }
+}
+
 /// Updates the cached profile timestamp so Settings can show when it was verified.
 #[tauri::command]
 pub fn github_touch_profile(db: State<'_, Db>) -> Result<(), String> {
@@ -492,6 +1261,12 @@ pub fn github_touch_profile(db: State<'_, Db>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builds_http_client() {
+        let client = client();
+        assert!(client.is_ok(), "client build failed: {:?}", client.err());
+    }
 
     #[test]
     fn parses_device_flow_token_responses() {

@@ -81,6 +81,128 @@ export type RepoPage = {
   hasMore: boolean;
 };
 
+export type GithubRepoDetail = {
+  id: number;
+  name: string;
+  fullName: string;
+  private: boolean;
+  fork: boolean;
+  archived: boolean;
+  description: string | null;
+  language: string | null;
+  stargazersCount: number;
+  watchersCount: number;
+  forksCount: number;
+  openIssuesCount: number;
+  size: number;
+  topics: string[];
+  defaultBranch: string;
+  htmlUrl: string;
+  cloneUrl: string;
+  sshUrl: string;
+  pushedAt: string | null;
+  updatedAt: string;
+  createdAt: string | null;
+  license: { name: string; spdxId: string | null } | null;
+  owner: { login: string; avatarUrl: string } | null;
+  starred: boolean;
+};
+
+export type RepoEntry = {
+  name: string;
+  path: string;
+  type: "file" | "dir" | "symlink" | "submodule";
+  size: number;
+  sha: string;
+  htmlUrl: string | null;
+  downloadUrl: string | null;
+};
+
+export type RepoFile = {
+  name: string;
+  path: string;
+  size: number;
+  sha: string;
+  htmlUrl: string;
+  content: string | null;
+  truncated: boolean;
+  binary: boolean;
+};
+
+export type RepoBranch = { name: string; sha: string; protected: boolean };
+
+export type RepoCommit = {
+  sha: string;
+  short: string;
+  message: string;
+  authorName: string;
+  authorLogin: string | null;
+  authorAvatar: string | null;
+  date: string | null;
+  htmlUrl: string;
+};
+
+export type RepoCommitFile = {
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  changes: number;
+  patch: string | null;
+};
+
+export type RepoCommitDetail = {
+  sha: string;
+  message: string;
+  authorName: string;
+  authorLogin: string | null;
+  authorAvatar: string | null;
+  date: string | null;
+  additions: number;
+  deletions: number;
+  htmlUrl: string;
+  files: RepoCommitFile[];
+};
+
+export type RepoPull = {
+  number: number;
+  title: string;
+  state: string;
+  draft: boolean;
+  merged: boolean;
+  authorLogin: string;
+  authorAvatar: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  comments: number;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  headRef: string;
+  baseRef: string;
+  htmlUrl: string;
+};
+
+export type RepoPullFile = {
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  patch: string | null;
+};
+
+export type RepoPullDetail = { pull: RepoPull; files: RepoPullFile[] };
+
+export type ForkResult = { fullName: string; htmlUrl: string; cloneUrl: string };
+
+export type GitActionResult = {
+  action: string;
+  ok: boolean;
+  output: string;
+  error: string | null;
+};
+
 export type GitStatus = {
   path: string;
   isRepo: boolean;
@@ -128,4 +250,32 @@ export const api = {
   saveGithubToken: (token: string) => call<GithubUser>("github_save_token", { token }),
   signOutGithub: () => call<boolean>("github_sign_out"),
   listRepos: (page: number) => call<RepoPage>("github_list_repos", { page }),
+
+  repoDetail: (owner: string, repo: string) =>
+    call<GithubRepoDetail>("github_repo_detail", { owner, repo }),
+  repoReadme: (owner: string, repo: string) =>
+    call<RepoFile | null>("github_repo_readme", { owner, repo }),
+  repoContents: (owner: string, repo: string, path: string, gitRef: string | null) =>
+    call<RepoEntry[]>("github_repo_contents", { owner, repo, path, gitRef }),
+  repoFile: (owner: string, repo: string, path: string, gitRef: string | null) =>
+    call<RepoFile>("github_repo_file", { owner, repo, path, gitRef }),
+  repoBranches: (owner: string, repo: string) =>
+    call<RepoBranch[]>("github_repo_branches", { owner, repo }),
+  repoCommits: (owner: string, repo: string, gitRef: string | null, page: number) =>
+    call<RepoCommit[]>("github_repo_commits", { owner, repo, gitRef, page }),
+  repoCommit: (owner: string, repo: string, sha: string) =>
+    call<RepoCommitDetail>("github_repo_commit", { owner, repo, sha }),
+  repoPulls: (owner: string, repo: string, state: string) =>
+    call<RepoPull[]>("github_repo_pulls", { owner, repo, state }),
+  repoPull: (owner: string, repo: string, number: number) =>
+    call<RepoPullDetail>("github_repo_pull", { owner, repo, number }),
+  forkRepo: (owner: string, repo: string) =>
+    call<ForkResult>("github_fork", { owner, repo }),
+  setStar: (owner: string, repo: string, starred: boolean) =>
+    call<boolean>("github_set_star", { owner, repo, starred }),
+  cloneDestination: (owner: string, repo: string) =>
+    call<string>("clone_destination", { owner, repo }),
+  cloneRepo: (url: string, dest: string) => call<string>("clone_repo", { url, dest }),
+  gitAction: (path: string, action: string) =>
+    call<GitActionResult>("git_action", { path, action }),
 };

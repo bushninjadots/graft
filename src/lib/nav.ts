@@ -65,7 +65,8 @@ export const NAV_ITEMS: NavItem[] = [
     bullets: [
       "OAuth device flow with tokens in the system keyring",
       "Public and private repositories, organisations included",
-      "Links open in your browser; GRAFT never embeds a GitHub webpage",
+      "README, files, commits, pull requests and branches read inside GRAFT",
+      "Star, fork and clone without leaving the app",
     ],
   },
   {
@@ -90,6 +91,7 @@ export const NAV_ITEMS: NavItem[] = [
     summary: "Design your GitHub profile README visually, then publish deliberately.",
     bullets: [
       "Section-based Markdown editor with live preview",
+      "Keep it as an app-only draft, or publish it to your GitHub profile",
       "Diff against the live README before syncing",
       "GitHub-compatible output only — no unsupported CSS",
     ],

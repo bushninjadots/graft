@@ -39,7 +39,7 @@ Rules that keep this maintainable:
 | Path | Purpose |
 | ---- | ------- |
 | `src/App.svelte` | shell composition, keyboard shortcuts, boot sequence |
-| `src/views/` | Home, Projects, Repositories, Settings, ModuleView (status panels) |
+| `src/views/` | Home, Projects, Repositories, Repository, Settings, ModuleView |
 | `src/lib/state/` | `appearance`, `nav`, `dashboard`, `github`, `session`, `ui` |
 | `src-tauri/src/schema/` | numbered SQL migrations, embedded with `include_str!` |
 | `~/.local/share/dev.graft.desktop/graft.db` | local database (WAL) |
@@ -89,6 +89,20 @@ Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`
 | `github_sign_out` | — | `bool` (credential removed) |
 | `github_list_repos` | `page` | `RepoPage` (100 per page, next-page detection) |
 | `github_touch_profile` | — | `void` |
+| `github_repo_detail` | `owner, repo` | `RepoDetail` plus `starred` |
+| `github_repo_readme` | `owner, repo` | `RepoFile \| null` |
+| `github_repo_contents` | `owner, repo, path, gitRef` | `RepoEntry[]` |
+| `github_repo_file` | `owner, repo, path, gitRef` | `RepoFile` (text, truncated or binary) |
+| `github_repo_branches` | `owner, repo` | `RepoBranch[]` |
+| `github_repo_commits` | `owner, repo, gitRef, page` | `RepoCommit[]` (40 per page) |
+| `github_repo_commit` | `owner, repo, sha` | `RepoCommitDetail` with per-file patches |
+| `github_repo_pulls` | `owner, repo, state` | `RepoPull[]` (`open`, `closed`, `all`) |
+| `github_repo_pull` | `owner, repo, number` | `RepoPullDetail` with files |
+| `github_fork` | `owner, repo` | `ForkResult` |
+| `github_set_star` | `owner, repo, starred` | `bool` |
+| `clone_destination` | `owner, repo` | suggested `~/Projects/<owner>-<repo>` path |
+| `clone_repo` | `url, dest` | path (refuses an existing destination) |
+| `git_action` | `path, action` | `GitActionResult` (`fetch`, `pull --ff-only`, `push` only) |
 
 Serde maps snake_case fields to camelCase for JS. GitHub payloads deserialize from
 the API's snake_case and serialize with `rename_all(serialize = "camelCase")`. Bump this table when adding a
@@ -96,8 +110,12 @@ command, and add the matching wrapper in `lib/api.ts`.
 
 ## Security posture (Phase 1)
 
-- CSP permits own assets, `ipc:` and avatar images from `avatars.githubusercontent.com`.
-  No API origin is reachable from the webview; GitHub traffic is Rust-only.
+- CSP permits own assets, `ipc:` and images from GitHub's avatar, raw and camo
+  hosts. No API origin is reachable from the webview; GitHub traffic is Rust-only.
+- Markdown (README, pull request bodies) is rendered with `marked` and sanitized
+  with DOMPurify; links are handed to `open_external`, never navigated in-app.
+- File contents come from the contents API, are decoded in Rust, and are refused
+  when binary or larger than 512 KB.
 - Capability file grants `core:default` only. No shell, fs or http plugin.
 - The UI has no direct filesystem, process or network access.
 - GitHub tokens live in the Secret Service through `keyring`; SQLite stores only the
@@ -114,7 +132,8 @@ command, and add the matching wrapper in `lib/api.ts`.
 - Lists are plain DOM for now; virtualise at the point a list can exceed ~200 rows.
 - `detect_tools` runs on demand and on the Environment module's refresh action.
 - GitHub calls happen only when a view needs them: status at boot (one `/user`),
-  repositories when Repositories opens, Git status per linked project on Projects.
+  repositories when Repositories opens, Git status per linked project on Projects,
+  and each repository tab when it is first shown. Nothing polls in the background.
 - Typesetting and geometry come from CSS tokens; no JS layout measurement in the shell.
 
 ## Build and run

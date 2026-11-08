@@ -85,6 +85,32 @@ pub fn project_git_status(path: String) -> crate::git::GitStatus {
     crate::git::status(&path)
 }
 
+#[tauri::command]
+pub fn git_action(path: String, action: String) -> crate::git::GitActionResult {
+    crate::git::action(&path, &action)
+}
+
+#[tauri::command]
+pub fn clone_repo(url: String, dest: String) -> Result<String, String> {
+    crate::git::clone(&url, &dest)
+}
+
+/// Suggests `~/Projects/<owner>-<repo>` (or `~/<owner>-<repo>` when there is no
+/// Projects folder). The UI stays editable; nothing is created here.
+#[tauri::command]
+pub fn clone_destination(owner: String, repo: String) -> String {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let projects = Path::new(&home).join("Projects");
+    let base = if projects.is_dir() {
+        projects
+    } else {
+        Path::new(&home).to_path_buf()
+    };
+    base.join(format!("{owner}-{repo}"))
+        .display()
+        .to_string()
+}
+
 /// Opens a link in the user's browser. Restricted to http(s) so a bad render can
 /// never hand an arbitrary scheme to the desktop environment.
 #[tauri::command]

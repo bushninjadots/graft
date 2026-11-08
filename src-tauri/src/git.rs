@@ -203,6 +203,159 @@ pub fn github_slug(remote: &str) -> Option<String> {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitActionResult {
+    pub action: String,
+    pub ok: bool,
+    pub output: String,
+    pub error: Option<String>,
+}
+
+/// Runs one of the explicitly allowed write operations against a linked project.
+/// Anything else is rejected; there is no generic command runner here.
+pub fn action(path: &str, action: &str) -> GitActionResult {
+    let args: &[&str] = match action {
+        "fetch" => &["fetch", "--all", "--prune"],
+        "pull" => &["pull", "--ff-only"],
+        "push" => &["push"],
+        other => {
+            return GitActionResult {
+                action: other.to_string(),
+                ok: false,
+                output: String::new(),
+                error: Some(format!("Unsupported git action: {other}")),
+            }
+        }
+    };
+
+    if !Path::new(path).is_dir() {
+        return GitActionResult {
+            action: action.to_string(),
+            ok: false,
+            output: String::new(),
+            error: Some(format!("Directory does not exist: {path}")),
+        };
+    }
+
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .env("GIT_OPTIONAL_LOCKS", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("LC_ALL", "C")
+        .output();
+
+    match output {
+        Ok(output) => {
+            let mut text = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.trim().is_empty() {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(&stderr);
+            }
+            let text = truncate_output(text.trim());
+            if output.status.success() {
+                GitActionResult {
+                    action: action.to_string(),
+                    ok: true,
+                    output: if text.is_empty() {
+                        "Already up to date.".to_string()
+                    } else {
+                        text
+                    },
+                    error: None,
+                }
+            } else {
+                GitActionResult {
+                    action: action.to_string(),
+                    ok: false,
+                    output: text.clone(),
+                    error: Some(if text.is_empty() {
+                        "git exited with an error.".to_string()
+                    } else {
+                        text
+                    }),
+                }
+            }
+        }
+        Err(error) => GitActionResult {
+            action: action.to_string(),
+            ok: false,
+            output: String::new(),
+            error: Some(format!("Cannot run git: {error}")),
+        },
+    }
+}
+
+fn truncate_output(value: &str) -> String {
+    const LIMIT: usize = 6000;
+    let chars: Vec<char> = value.chars().collect();
+    if chars.len() <= LIMIT {
+        value.to_string()
+    } else {
+        let tail: String = chars[chars.len() - LIMIT..].iter().collect();
+        format!("…{tail}")
+    }
+}
+
+/// Clones a repository to a new directory. Refuses to touch an existing path and
+/// only accepts network Git URLs.
+pub fn clone(url: &str, dest: &str) -> Result<String, String> {
+    let url = url.trim();
+    let dest = dest.trim();
+    let allowed = url.starts_with("https://")
+        || url.starts_with("http://")
+        || url.starts_with("ssh://")
+        || url.starts_with("git@");
+    if !allowed {
+        return Err("Only https, ssh or git@ clone URLs are accepted.".to_string());
+    }
+    if dest.is_empty() {
+        return Err("Choose a directory for the clone.".to_string());
+    }
+
+    let target = Path::new(dest);
+    if target.exists() {
+        return Err(format!("Destination already exists: {dest}"));
+    }
+    let parent = target
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| "Choose a directory inside an existing folder.".to_string())?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("Cannot create {}: {e}", parent.display()))?;
+
+    let output = Command::new("git")
+        .args(["clone", "--progress", url, dest])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("LC_ALL", "C")
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                "Git is not installed or not on PATH.".to_string()
+            } else {
+                format!("Cannot run git: {e}")
+            }
+        })?;
+
+    if output.status.success() {
+        Ok(dest.to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .last()
+            .unwrap_or("git clone failed")
+            .trim();
+        Err(detail.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

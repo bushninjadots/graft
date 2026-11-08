@@ -7,6 +7,7 @@
     githubUser,
     loadGithub,
     loadRepos,
+    openRepo,
     setClientId,
     signOut,
     visibleRepos,
@@ -44,7 +45,10 @@
   });
 
   onMount(() => {
-    if (!github.status) void loadGithub();
+    void (async () => {
+      if (!github.status) await loadGithub();
+      if (github.status?.signedIn && github.repos.length === 0) await loadRepos(true);
+    })();
   });
 
   onDestroy(() => {
@@ -412,14 +416,24 @@
                 <span>updated {relativeTime(Date.parse(repo.updatedAt) / 1000)}</span>
               </div>
             </div>
-            <button
-              class="btn ghost icon"
-              title="Open on GitHub"
-              aria-label={`Open ${repo.fullName} on GitHub`}
-              onclick={() => open(repo.htmlUrl)}
-            >
-              <Icon name="arrow-up-right" size={13} />
-            </button>
+            <div class="repo-actions">
+              <button
+                class="btn ghost icon"
+                title="Browse in GRAFT"
+                aria-label={`Browse ${repo.fullName} in GRAFT`}
+                onclick={() => openRepo(repo)}
+              >
+                <Icon name="chevron-right" size={13} />
+              </button>
+              <button
+                class="btn ghost icon"
+                title="Open on GitHub"
+                aria-label={`Open ${repo.fullName} on GitHub`}
+                onclick={() => open(repo.htmlUrl)}
+              >
+                <Icon name="arrow-up-right" size={13} />
+              </button>
+            </div>
           </li>
         {/each}
       </ul>
@@ -676,6 +690,12 @@
 
   .repo:hover {
     border-color: var(--border-strong);
+  }
+
+  .repo-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
   }
 
   .repo-main {
