@@ -1,0 +1,174 @@
+<script lang="ts">
+  import { onMount } from "svelte";
+  import { fade } from "svelte/transition";
+  import Sidebar from "./lib/components/Sidebar.svelte";
+  import TopBar from "./lib/components/TopBar.svelte";
+  import StatusBar from "./lib/components/StatusBar.svelte";
+  import CommandPalette from "./lib/components/CommandPalette.svelte";
+  import Home from "./views/Home.svelte";
+  import Projects from "./views/Projects.svelte";
+  import Repositories from "./views/Repositories.svelte";
+  import SettingsView from "./views/Settings.svelte";
+  import ModuleView from "./views/ModuleView.svelte";
+  import { navById } from "./lib/nav";
+  import { ui } from "./lib/state/ui.svelte";
+  import { applyAppearance, loadAppearance, toggleSidebar } from "./lib/state/appearance.svelte";
+  import { loadNav } from "./lib/state/nav.svelte";
+  import { loadDashboard } from "./lib/state/dashboard.svelte";
+  import { boot, refreshTools, session } from "./lib/state/session.svelte";
+  import { loadGithub } from "./lib/state/github.svelte";
+
+  const active = $derived(navById(ui.view) ?? navById("home")!);
+
+  onMount(() => {
+    applyAppearance();
+
+    void (async () => {
+      await boot();
+      await Promise.all([loadAppearance(), loadNav(), loadDashboard()]);
+      await refreshTools();
+      if (session.online) void loadGithub();
+    })();
+
+    function onKeydown(event: KeyboardEvent): void {
+      const target = event.target as HTMLElement | null;
+      const typing =
+        !!target &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        ui.paletteOpen = !ui.paletteOpen;
+        return;
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b" && !typing) {
+        event.preventDefault();
+        toggleSidebar();
+        return;
+      }
+
+      if (event.key === "Escape" && ui.paletteOpen) {
+        event.preventDefault();
+        ui.paletteOpen = false;
+        return;
+      }
+
+      if (event.key === "/" && !typing && !ui.paletteOpen) {
+        event.preventDefault();
+        ui.paletteOpen = true;
+      }
+    }
+
+    window.addEventListener("keydown", onKeydown);
+    return () => window.removeEventListener("keydown", onKeydown);
+  });
+</script>
+
+<div class="shell">
+  <Sidebar />
+
+  <div class="main">
+    <TopBar item={active} />
+
+    {#if !session.online}
+      <div class="offline">
+        <span class="badge warn">backend offline</span>
+        <span>{session.error ?? "The Rust engine is not reachable."}</span>
+      </div>
+    {/if}
+
+    <main class="content">
+      {#key ui.view}
+        <div class="view-wrap" in:fade={{ duration: 90 }}>
+          {#if ui.view === "home"}
+            <Home />
+          {:else if ui.view === "projects"}
+            <Projects />
+          {:else if ui.view === "repositories"}
+            <Repositories />
+          {:else if ui.view === "settings"}
+            <SettingsView />
+          {:else}
+            <ModuleView item={active} />
+          {/if}
+        </div>
+      {/key}
+    </main>
+
+    <StatusBar />
+  </div>
+
+  {#if ui.paletteOpen}
+    <CommandPalette />
+  {/if}
+
+  {#if ui.toast}
+    <div class="toast" class:danger={ui.toast.tone === "danger"} class:ok={ui.toast.tone === "ok"} role="status">
+      {ui.toast.text}
+    </div>
+  {/if}
+</div>
+
+<style>
+  .shell {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+    background: var(--bg);
+  }
+
+  .main {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .offline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 14px;
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--warn) 7%, var(--bg));
+    color: var(--text-muted);
+    font-size: 10.5px;
+  }
+
+  .content {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .view-wrap {
+    height: 100%;
+  }
+
+  .toast {
+    position: fixed;
+    right: 14px;
+    bottom: calc(var(--statusbar-h) + 12px);
+    z-index: 40;
+    max-width: 380px;
+    padding: 7px 11px;
+    border: 1px solid var(--border-strong);
+    border-left: 2px solid var(--accent);
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-shadow: 0 14px 34px -14px var(--shadow);
+    color: var(--text);
+    font-size: 11px;
+  }
+
+  .toast.ok {
+    border-left-color: var(--ok);
+  }
+
+  .toast.danger {
+    border-left-color: var(--danger);
+  }
+</style>

@@ -1,0 +1,29 @@
+{
+  "name": "graft",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "GRAFT — a personal GitHub environment for the Linux desktop",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "tauri": "tauri",
+    "app:dev": "tauri dev",
+    "app:build": "tauri build",
+    "verify": "npm run check && npm run build && npm run check:rust"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "lucide-svelte": "^1.0.1"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6",
+    "@tauri-apps/cli": "^2",
+    "svelte": "^5",
+    "svelte-check": "^4",
+    "typescript": "^5",
+    "vite": "^7"
+  }
+}

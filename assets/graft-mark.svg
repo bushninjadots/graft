@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <rect width="1024" height="1024" rx="120" fill="#0f1213"/>
+  <rect x="118.5" y="118.5" width="787" height="787" rx="72" fill="none" stroke="#232829" stroke-width="3"/>
+
+  <!-- left form -->
+  <path d="M 250 300 H 470 V 372 H 322 V 652 H 470 V 724 H 250 Z" fill="#d9a441"/>
+
+  <!-- right form, offset and lighter -->
+  <path d="M 554 300 H 774 V 724 H 554 V 652 H 702 V 372 H 554 Z" fill="#8d9494"/>
+
+  <!-- graft joint -->
+  <rect x="482" y="470" width="60" height="84" rx="6" fill="#e2e6e6"/>
+</svg>

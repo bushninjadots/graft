@@ -1,0 +1,130 @@
+# GRAFT — architecture
+
+## Shape
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ Svelte 5 UI (src/)                                           │
+│  views/            one screen per sidebar module              │
+│  lib/components/   shell: sidebar, topbar, palette, statusbar │
+│  lib/state/*.svelte.ts   reactive state + persistence         │
+│  lib/themes.ts     theme token contract                       │
+│  lib/api.ts        typed IPC surface (the only invoke() site) │
+└───────────────────────────┬──────────────────────────────────┘
+                            │ tauri IPC (JSON, camelCase)
+┌───────────────────────────▼──────────────────────────────────┐
+│ Rust engine (src-tauri/src/)                                  │
+│  commands.rs   thin command handlers, validation, errors      │
+│  db.rs         SQLite, migrations, queries                    │
+│  tools.rs      environment probing                            │
+│  github.rs     device flow, API client, repository listing    │
+│  git.rs        read-only local repository inspection          │
+│  secrets.rs    keyring token custody                          │
+│  extract/      (Phase 4) repository analysis                  │
+└───────────────────────────┬──────────────────────────────────┘
+                            │
+              SQLite (XDG data dir) · keyring (secrets) · OS tools
+```
+
+Rules that keep this maintainable:
+
+- `lib/api.ts` is the only module that calls `invoke`. Views never build IPC strings.
+- Commands validate input and return `Result<T, String>`; the UI shows the message.
+- The Rust side owns all filesystem, git and network access. The webview is not
+  trusted with paths, tokens or subprocesses.
+- No feature reaches across another module's files. Shared code moves to `lib/`.
+
+## Runtime layout
+
+| Path | Purpose |
+| ---- | ------- |
+| `src/App.svelte` | shell composition, keyboard shortcuts, boot sequence |
+| `src/views/` | Home, Projects, Repositories, Settings, ModuleView (status panels) |
+| `src/lib/state/` | `appearance`, `nav`, `dashboard`, `github`, `session`, `ui` |
+| `src-tauri/src/schema/` | numbered SQL migrations, embedded with `include_str!` |
+| `~/.local/share/dev.graft.desktop/graft.db` | local database (WAL) |
+| `~/.local/share/dev.graft.desktop/` | app data root (Tauri `app_data_dir`) |
+
+## Data model (schema 1)
+
+```sql
+settings(key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER)
+projects(id INTEGER PK, name TEXT, path TEXT, description TEXT,
+         created_at INTEGER, updated_at INTEGER)
+```
+
+Migrations are append-only: add `schema/00N_*.sql`, bump `SCHEMA_VERSION`, add an
+`if current < N` branch in `db::migrate`. Never edit a shipped migration.
+
+Settings blobs currently stored:
+
+| Key | Shape |
+| --- | ----- |
+| `appearance` | `{ themeId, density, radius, sidebarCollapsed }` |
+| `nav.preferences` | `{ order: string[], hidden: string[], pinned: string[] }` |
+| `dashboard.layout` | `{ order: string[], hidden: string[] }` |
+| `github.clientId` | public OAuth app client ID (not a secret) |
+| `github.profile` | cached `GithubUser` JSON for offline display |
+
+Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`.
+
+## IPC contract
+
+| Command | Args | Returns |
+| ------- | ---- | ------- |
+| `app_info` | — | `{ version, dataDir, dbPath, schemaVersion }` |
+| `get_setting` | `key` | `string \| null` |
+| `set_setting` | `key, value` | `void` |
+| `list_projects` | — | `Project[]` |
+| `create_project` | `name, path, description` | `Project` |
+| `delete_project` | `id` | `void` |
+| `detect_tools` | — | `ToolInfo[]` |
+| `project_git_status` | `path` | `GitStatus` (never fails; errors are reported in the payload) |
+| `open_external` | `url` | `void` — rejects non-http(s) schemes |
+| `github_status` | — | `AuthStatus` (keyring probe, profile refresh, scopes) |
+| `github_set_client_id` | `clientId` | `void` |
+| `github_start_device` | — | `DeviceStart` (code, URI, interval, expiry) |
+| `github_poll_device` | `deviceCode` | `DevicePoll` — `pending`, `slowDown`, `complete`, `failed` |
+| `github_save_token` | `token` | `GithubUser` (verified against `/user` before storage) |
+| `github_sign_out` | — | `bool` (credential removed) |
+| `github_list_repos` | `page` | `RepoPage` (100 per page, next-page detection) |
+| `github_touch_profile` | — | `void` |
+
+Serde maps snake_case fields to camelCase for JS. GitHub payloads deserialize from
+the API's snake_case and serialize with `rename_all(serialize = "camelCase")`. Bump this table when adding a
+command, and add the matching wrapper in `lib/api.ts`.
+
+## Security posture (Phase 1)
+
+- CSP permits own assets, `ipc:` and avatar images from `avatars.githubusercontent.com`.
+  No API origin is reachable from the webview; GitHub traffic is Rust-only.
+- Capability file grants `core:default` only. No shell, fs or http plugin.
+- The UI has no direct filesystem, process or network access.
+- GitHub tokens live in the Secret Service through `keyring`; SQLite stores only the
+  public OAuth client ID and the cached profile.
+- Tokens never cross IPC: `github_status` reports presence and identity, not the token.
+- `open_external` accepts `http(s)` only; Git access is read-only inspection of
+  directories the user linked.
+- Destructive operations (delete project, git reset, extraction) must be confirmed
+  in the UI and re-validated in Rust.
+
+## Performance approach
+
+- Lazy: no network, polling or watcher starts on boot; the engine opens SQLite only.
+- Lists are plain DOM for now; virtualise at the point a list can exceed ~200 rows.
+- `detect_tools` runs on demand and on the Environment module's refresh action.
+- GitHub calls happen only when a view needs them: status at boot (one `/user`),
+  repositories when Repositories opens, Git status per linked project on Projects.
+- Typesetting and geometry come from CSS tokens; no JS layout measurement in the shell.
+
+## Build and run
+
+```bash
+npm install          # frontend deps + Tauri CLI
+npm run app:dev      # Tauri dev window (Vite on :1420)
+npm run verify       # svelte-check + vite build + cargo check
+npm run app:build    # release binary + deb/appimage bundles
+```
+
+Arch prerequisites: `webkit2gtk-4.1`, `gtk3`, `libsoup3`, `base-devel`, `rust`,
+`nodejs`, `npm`. Details in `README.md`.

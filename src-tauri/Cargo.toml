@@ -1,0 +1,29 @@
+[package]
+name = "graft"
+version = "0.1.0"
+description = "GRAFT — a personal GitHub environment for the Linux desktop"
+authors = ["bender"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "graft_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.41", features = ["bundled"] }
+keyring = { version = "3.6.3", features = ["sync-secret-service", "crypto-rust"] }
+reqwest = { version = "0.13.3", default-features = false, features = ["json", "form", "native-tls"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
