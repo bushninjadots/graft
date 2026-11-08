@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type { ProfileDesign } from "./profile";
 
 export type Project = {
@@ -169,6 +169,7 @@ export type RepoCommit = {
   authorAvatar: string | null;
   date: string | null;
   htmlUrl: string;
+  parents: string[];
 };
 
 export type RepoCommitFile = {
@@ -210,6 +211,7 @@ export type RepoPull = {
   changedFiles: number;
   headRef: string;
   baseRef: string;
+  headSha: string;
   htmlUrl: string;
 };
 
@@ -222,6 +224,163 @@ export type RepoPullFile = {
 };
 
 export type RepoPullDetail = { pull: RepoPull; files: RepoPullFile[] };
+
+export type RepoPullReview = {
+  id: number;
+  state: string;
+  body: string;
+  authorLogin: string;
+  authorAvatar: string;
+  submittedAt: string | null;
+  htmlUrl: string | null;
+};
+
+export type RepoPullComment = {
+  id: number;
+  body: string;
+  path: string;
+  line: number | null;
+  originalLine: number | null;
+  side: string | null;
+  authorLogin: string;
+  authorAvatar: string;
+  createdAt: string;
+  htmlUrl: string;
+};
+
+export type WatchtowerRepo = {
+  id: number;
+  owner: string;
+  name: string;
+  fullName: string;
+  htmlUrl: string;
+  description: string | null;
+  language: string | null;
+  private: boolean;
+  lastPolledAt: number | null;
+  lastError: string | null;
+  createdAt: number;
+};
+
+export type WatchtowerEvent = {
+  id: number;
+  repoId: number;
+  repoFullName: string;
+  category: string;
+  kind: string;
+  action: string;
+  title: string;
+  detail: string;
+  actor: string;
+  url: string;
+  occurredAt: string;
+  seen: boolean;
+  createdAt: number;
+};
+
+export type WatchtowerSnapshot = {
+  repos: WatchtowerRepo[];
+  events: WatchtowerEvent[];
+  unread: number;
+};
+
+export type WatchtowerPoll = {
+  checked: number;
+  notModified: number;
+  newEvents: WatchtowerEvent[];
+  errors: string[];
+};
+
+export type VisitedRepo = {
+  fullName: string;
+  owner: string;
+  name: string;
+  htmlUrl: string;
+  description: string | null;
+  language: string | null;
+  topics: string[];
+  stars: number;
+  forks: number;
+  defaultBranch: string;
+  private: boolean;
+  visitCount: number;
+  lastVisitedAt: number;
+};
+
+export type WatchtowerRecommendation = {
+  repo: GithubRepo;
+  reason: string;
+  score: number;
+};
+
+export type WatchtowerDiscovery = {
+  starred: GithubRepo[];
+  visited: VisitedRepo[];
+  recommended: WatchtowerRecommendation[];
+  errors: string[];
+};
+
+export type TerminalEvent =
+  | { type: "output"; data: string }
+  | { type: "exit" }
+  | { type: "error"; message: string };
+
+export type TerminalSessionInfo = {
+  id: string;
+  shell: string;
+  cwd: string;
+};
+
+export type TerminalEnvironment = {
+  cwd: string;
+  shells: string[];
+  defaultShell: string;
+};
+
+export type SavedSearch = {
+  id: number;
+  name: string;
+  query: string;
+  language: string;
+  topic: string;
+  author: string;
+  sort: string;
+  createdAt: number;
+};
+
+export type Collection = {
+  id: number;
+  name: string;
+  description: string;
+  repoCount: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type CollectionRepo = {
+  id: number;
+  collectionId: number;
+  owner: string;
+  name: string;
+  fullName: string;
+  htmlUrl: string;
+  description: string | null;
+  language: string | null;
+  private: boolean;
+  topics: string[];
+  stars: number;
+  forks: number;
+  defaultBranch: string;
+  status: string;
+  notes: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type CollectionDetail = {
+  collection: Collection;
+  repos: CollectionRepo[];
+};
 
 export type ForkResult = { fullName: string; htmlUrl: string; cloneUrl: string };
 
@@ -382,6 +541,31 @@ export const api = {
     }),
   githubNotifications: () =>
     call<GithubNotification[]>("github_notifications"),
+  watchtowerSnapshot: () => call<WatchtowerSnapshot>("watchtower_snapshot"),
+  watchRepo: (owner: string, repo: string) =>
+    call<WatchtowerRepo>("watchtower_watch", { owner, repo }),
+  unwatchRepo: (id: number) => call<void>("watchtower_unwatch", { id }),
+  pollWatchtower: (categories: string[]) =>
+    call<WatchtowerPoll>("watchtower_poll", { categories }),
+  markWatchtowerRead: (id: number | null) =>
+    call<number>("watchtower_mark_read", { id }),
+  watchtowerDiscover: () =>
+    call<WatchtowerDiscovery>("watchtower_discover"),
+  recordRepoVisit: (repo: GithubRepo) =>
+    call<void>("watchtower_record_visit", {
+      repo: {
+        owner: repo.owner?.login ?? repo.fullName.split("/")[0] ?? "",
+        name: repo.name,
+        htmlUrl: repo.htmlUrl,
+        description: repo.description,
+        language: repo.language,
+        topics: repo.topics,
+        stars: repo.stargazersCount,
+        forks: repo.forksCount,
+        defaultBranch: repo.defaultBranch,
+        private: repo.private,
+      },
+    }),
 
   repoDetail: (owner: string, repo: string) =>
     call<GithubRepoDetail>("github_repo_detail", { owner, repo }),
@@ -401,6 +585,38 @@ export const api = {
     call<RepoPull[]>("github_repo_pulls", { owner, repo, state }),
   repoPull: (owner: string, repo: string, number: number) =>
     call<RepoPullDetail>("github_repo_pull", { owner, repo, number }),
+  repoPullReviews: (owner: string, repo: string, number: number) =>
+    call<RepoPullReview[]>("github_repo_pull_reviews", { owner, repo, number }),
+  repoPullComments: (owner: string, repo: string, number: number) =>
+    call<RepoPullComment[]>("github_repo_pull_comments", { owner, repo, number }),
+  submitPullReview: (
+    owner: string,
+    repo: string,
+    number: number,
+    event: string,
+    body: string,
+  ) =>
+    call<RepoPullReview>("github_submit_pull_review", { owner, repo, number, event, body }),
+  createPullComment: (
+    owner: string,
+    repo: string,
+    number: number,
+    body: string,
+    commitId: string,
+    path: string,
+    line: number,
+    side: string,
+  ) =>
+    call<RepoPullComment>("github_create_pull_comment", {
+      owner,
+      repo,
+      number,
+      body,
+      commitId,
+      path,
+      line,
+      side,
+    }),
   forkRepo: (owner: string, repo: string) =>
     call<ForkResult>("github_fork", { owner, repo }),
   setStar: (owner: string, repo: string, starred: boolean) =>
@@ -418,6 +634,64 @@ export const api = {
     call<GitActionResult>("git_create_branch", { path, name, switch: switchTo }),
   gitSwitchBranch: (path: string, name: string) =>
     call<GitActionResult>("git_switch_branch", { path, name }),
+
+  terminalEnvironment: () => call<TerminalEnvironment>("terminal_environment"),
+  terminalStart: (
+    cwd: string,
+    shell: string,
+    cols: number,
+    rows: number,
+    onEvent: (event: TerminalEvent) => void,
+  ) => {
+    const channel = new Channel<TerminalEvent>();
+    channel.onmessage = onEvent;
+    return call<TerminalSessionInfo>("terminal_start", {
+      cwd,
+      shell,
+      cols,
+      rows,
+      channel,
+    });
+  },
+  terminalWrite: (sessionId: string, data: string) =>
+    call<void>("terminal_write", { sessionId, data }),
+  terminalResize: (sessionId: string, cols: number, rows: number) =>
+    call<void>("terminal_resize", { sessionId, cols, rows }),
+  terminalClose: (sessionId: string) =>
+    call<void>("terminal_close", { sessionId }),
+
+  savedSearches: () => call<SavedSearch[]>("explore_saved_searches"),
+  saveSearch: (
+    name: string,
+    query: string,
+    language: string,
+    topic: string,
+    author: string,
+    sort: string,
+  ) =>
+    call<SavedSearch>("explore_save_search", {
+      name,
+      query,
+      language,
+      topic,
+      author,
+      sort,
+    }),
+  deleteSavedSearch: (id: number) =>
+    call<void>("explore_delete_search", { id }),
+  collections: () => call<Collection[]>("collections_list"),
+  createCollection: (name: string, description: string) =>
+    call<Collection>("collections_create", { name, description }),
+  deleteCollection: (id: number) =>
+    call<void>("collections_delete", { id }),
+  collectionDetail: (id: number) =>
+    call<CollectionDetail>("collection_detail", { id }),
+  addCollectionRepo: (collectionId: number, owner: string, repo: string) =>
+    call<CollectionRepo>("collection_add_repo", { collectionId, owner, repo }),
+  updateCollectionRepo: (id: number, status: string, notes: string) =>
+    call<CollectionRepo>("collection_update_repo", { id, status, notes }),
+  removeCollectionRepo: (id: number) =>
+    call<void>("collection_remove_repo", { id }),
 
   githubProfileReadme: (login: string) =>
     call<ProfileReadme>("github_profile_readme", { login }),

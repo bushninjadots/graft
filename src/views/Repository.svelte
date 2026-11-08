@@ -13,13 +13,23 @@
     type RepoFile,
     type RepoIssue,
     type RepoPull,
+    type RepoPullComment,
     type RepoPullDetail,
+    type RepoPullReview,
   } from "../lib/api";
   import { closeRepo, github, loadRepos } from "../lib/state/github.svelte";
   import { notify, ui } from "../lib/state/ui.svelte";
   import { pushNotification, type NotificationTarget } from "../lib/state/notifications.svelte";
+  import {
+    addWatch,
+    isWatched,
+    loadWatchtower,
+    watchtower,
+  } from "../lib/state/watchtower.svelte";
   import { plural, relativeTime } from "../lib/format";
   import Icon from "../lib/components/Icon.svelte";
+  import DiffView from "../lib/components/DiffView.svelte";
+  import BranchGraph from "../lib/components/BranchGraph.svelte";
 
   type Tab = "overview" | "code" | "commits" | "pulls" | "issues" | "branches";
 
@@ -55,12 +65,24 @@
   let commitHasMore = $state(false);
   let commitDetail = $state<RepoCommitDetail | null>(null);
   let commitLoading = $state(false);
+  let commitView = $state<"list" | "graph">("list");
 
   let pullState = $state<"open" | "closed" | "all">("open");
   let pulls = $state<RepoPull[]>([]);
   let pullsLoading = $state(false);
   let pullDetail = $state<RepoPullDetail | null>(null);
   let pullLoading = $state(false);
+  let pullReviews = $state<RepoPullReview[]>([]);
+  let pullComments = $state<RepoPullComment[]>([]);
+  let reviewEvent = $state<"APPROVE" | "REQUEST_CHANGES" | "COMMENT">("COMMENT");
+  let reviewBody = $state("");
+  let reviewConfirm = $state(false);
+  let reviewSaving = $state(false);
+  let reviewError = $state<string | null>(null);
+  let commentTarget = $state<{ path: string; line: number; side: "LEFT" | "RIGHT" } | null>(null);
+  let commentBody = $state("");
+  let commentSaving = $state(false);
+  let commentError = $state<string | null>(null);
 
   let issues = $state<RepoIssue[]>([]);
   let issuesLoading = $state(false);
@@ -76,6 +98,8 @@
   let lastRefresh = 0;
 
   let starBusy = $state(false);
+  let watchBusy = $state(false);
+  const watching = $derived(!!detail && isWatched(detail.fullName));
   let forkBusy = $state(false);
   let forked = $state<{ fullName: string; htmlUrl: string } | null>(null);
   let cloneOpen = $state(false);
@@ -170,6 +194,7 @@
   }
 
   onMount(() => {
+    if (!watchtower.loaded) void loadWatchtower();
     void load();
     const onFocus = () => {
       if (!loading && !editing && Date.now() - lastRefresh > 60_000) {
@@ -204,6 +229,19 @@
     element.addEventListener("click", onClick);
     return () => element.removeEventListener("click", onClick);
   });
+
+  async function watchThis(): Promise<void> {
+    if (!detail || watchBusy || watching) return;
+    watchBusy = true;
+    const ok = await addWatch(owner, name);
+    watchBusy = false;
+    if (ok) pushNotification({
+      title: "Repository added to Watchtower",
+      detail: detail.fullName,
+      tone: "ok",
+      target: { view: "watchtower" },
+    });
+  }
 
   async function toggleStar(): Promise<void> {
     if (!detail) return;
@@ -470,12 +508,106 @@
   async function openPull(pull: RepoPull): Promise<void> {
     pullLoading = true;
     pullDetail = null;
+    pullReviews = [];
+    pullComments = [];
+    resetReview();
     try {
-      pullDetail = await api.repoPull(owner, name, pull.number);
+      const [detail, reviews, comments] = await Promise.all([
+        api.repoPull(owner, name, pull.number),
+        api.repoPullReviews(owner, name, pull.number).catch(() => []),
+        api.repoPullComments(owner, name, pull.number).catch(() => []),
+      ]);
+      pullDetail = detail;
+      pullReviews = reviews;
+      pullComments = comments;
     } catch (cause) {
       notify(message(cause), "danger");
     } finally {
       pullLoading = false;
+    }
+  }
+
+  function reviewActionLabel(event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT"): string {
+    return event === "APPROVE"
+      ? "Approve"
+      : event === "REQUEST_CHANGES"
+        ? "Request changes"
+        : "Comment";
+  }
+
+  function resetReview(): void {
+    reviewEvent = "COMMENT";
+    reviewBody = "";
+    reviewConfirm = false;
+    reviewError = null;
+    commentTarget = null;
+    commentBody = "";
+    commentError = null;
+  }
+
+  async function submitReview(): Promise<void> {
+    if (!pullDetail || reviewSaving) return;
+    reviewSaving = true;
+    reviewError = null;
+    try {
+      await api.submitPullReview(
+        owner,
+        name,
+        pullDetail.pull.number,
+        reviewEvent,
+        reviewBody,
+      );
+      pullReviews = await api.repoPullReviews(owner, name, pullDetail.pull.number);
+      const action = reviewActionLabel(reviewEvent);
+      resetReview();
+      pushNotification({
+        title: `${action} submitted`,
+        detail: `#${pullDetail.pull.number} ${pullDetail.pull.title}`,
+        tone: "ok",
+        target: repoTarget("pulls"),
+      });
+    } catch (cause) {
+      reviewError = message(cause);
+    } finally {
+      reviewSaving = false;
+    }
+  }
+
+  function beginPullComment(path: string, line: number, side: "LEFT" | "RIGHT"): void {
+    commentTarget = { path, line, side };
+    commentBody = "";
+    commentError = null;
+  }
+
+  async function submitPullComment(): Promise<void> {
+    if (!pullDetail || !commentTarget || commentSaving) return;
+    commentSaving = true;
+    commentError = null;
+    try {
+      const created = await api.createPullComment(
+        owner,
+        name,
+        pullDetail.pull.number,
+        commentBody,
+        pullDetail.pull.headSha,
+        commentTarget.path,
+        commentTarget.line,
+        commentTarget.side,
+      );
+      const targetPath = commentTarget.path;
+      pullComments = [...pullComments, created];
+      commentTarget = null;
+      commentBody = "";
+      pushNotification({
+        title: "Inline review comment posted",
+        detail: `${targetPath} · #${pullDetail.pull.number}`,
+        tone: "ok",
+        target: repoTarget("pulls"),
+      });
+    } catch (cause) {
+      commentError = message(cause);
+    } finally {
+      commentSaving = false;
     }
   }
 
@@ -509,6 +641,9 @@
         <button class="btn ghost" onclick={() => open(detail?.htmlUrl ?? repo.htmlUrl)}>GitHub ↗</button>
         <button class="btn ghost" onclick={toggleStar} disabled={starBusy || !detail}>
           {detail?.starred ? "★ Starred" : "☆ Star"}
+        </button>
+        <button class="btn ghost" onclick={watchThis} disabled={watchBusy || !detail || watching}>
+          {watching ? "Watching" : watchBusy ? "Adding…" : "Watch"}
         </button>
         <button class="btn ghost" onclick={forkRepo} disabled={forkBusy}>
           {forkBusy ? "Forking…" : "Fork"}
@@ -804,13 +939,19 @@
       {:else if tab === "commits"}
         <div class="panel split">
           <div class="bar">
-            <div class="branch-pick">
-              <Icon name="git-branch" size={11} />
-              <select class="field mono" bind:value={branch} onchange={() => loadCommits(true)}>
-                {#each branches as item (item.name)}
-                  <option value={item.name}>{item.name}</option>
-                {/each}
-              </select>
+            <div class="row">
+              <div class="branch-pick">
+                <Icon name="git-branch" size={11} />
+                <select class="field mono" bind:value={branch} onchange={() => loadCommits(true)}>
+                  {#each branches as item (item.name)}
+                    <option value={item.name}>{item.name}</option>
+                  {/each}
+                </select>
+              </div>
+              <div class="segmented">
+                <button class="seg" class:active={commitView === "list"} onclick={() => (commitView = "list")}>List</button>
+                <button class="seg" class:active={commitView === "graph"} onclick={() => (commitView = "graph")}>Graph</button>
+              </div>
             </div>
             <button class="btn ghost icon" title="Refresh commits" aria-label="Refresh commits" onclick={() => loadCommits(true)} disabled={commitsLoading}>
               <span class:spin={commitsLoading}><Icon name="refresh" size={12} /></span>
@@ -833,26 +974,15 @@
                 {#if commitDetail.message.split("\n").length > 1}
                   <pre class="message">{commitDetail.message.split("\n").slice(1).join("\n").trim()}</pre>
                 {/if}
-                {#each commitDetail.files as changed (changed.filename)}
-                  <div class="diff-file">
-                    <div class="diff-head mono">
-                      <span>{changed.filename}</span>
-                      <span class="add">+{changed.additions}</span>
-                      <span class="del">−{changed.deletions}</span>
-                    </div>
-                    {#if changed.patch}
-                      <pre class="patch">{changed.patch}</pre>
-                    {:else}
-                      <p class="hint">No textual diff (binary or too large).</p>
-                    {/if}
-                  </div>
-                {/each}
+                <DiffView files={commitDetail.files} />
               {/if}
             </div>
           {:else if commitsLoading && commits.length === 0}
             <p class="state mono">reading commits…</p>
           {:else if commits.length === 0}
             <p class="state">No commits on {branch ?? "this branch"}.</p>
+          {:else if commitView === "graph"}
+            <BranchGraph {commits} onselect={openCommit} />
           {:else}
             <ul class="commits">
               {#each commits as commit (commit.sha)}
@@ -903,20 +1033,103 @@
                 {#if pull.body}
                   <div class="markdown" bind:this={readmeEl}>{@html render(pull.body)}</div>
                 {/if}
-                {#each pullDetail.files as changed (changed.filename)}
-                  <div class="diff-file">
-                    <div class="diff-head mono">
-                      <span>{changed.filename}</span>
-                      <span class="add">+{changed.additions}</span>
-                      <span class="del">−{changed.deletions}</span>
+
+                {#if pullReviews.length > 0}
+                  <div class="review-list">
+                    <span class="mono-label">reviews</span>
+                    {#each pullReviews as review (review.id)}
+                      <div class="review-item">
+                        <span class="badge" class:ok={review.state === "APPROVED"} class:warn={review.state === "CHANGES_REQUESTED"}>
+                          {review.state.toLowerCase().replaceAll("_", " ")}
+                        </span>
+                        <span class="mono faint">@{review.authorLogin}</span>
+                        {#if review.body}<p>{review.body}</p>{/if}
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+
+                {#if pull.state === "open"}
+                  <div class="review-box">
+                    <div class="review-top">
+                      <span class="mono-label">review this pull request</span>
+                      <select class="field" bind:value={reviewEvent} disabled={reviewSaving || reviewConfirm}>
+                        <option value="COMMENT">Comment</option>
+                        <option value="APPROVE">Approve</option>
+                        <option value="REQUEST_CHANGES">Request changes</option>
+                      </select>
                     </div>
-                    {#if changed.patch}
-                      <pre class="patch">{changed.patch}</pre>
+                    <textarea
+                      class="field review-body"
+                      bind:value={reviewBody}
+                      maxlength="65536"
+                      placeholder={reviewEvent === "APPROVE" ? "Optional approval note" : "Review summary (required)"}
+                      aria-label="Review summary"
+                      disabled={reviewSaving || reviewConfirm}
+                    ></textarea>
+                    {#if reviewError}<p class="error">{reviewError}</p>{/if}
+                    {#if reviewConfirm}
+                      <div class="review-confirm">
+                        <span class="badge warn">external write · {reviewActionLabel(reviewEvent)}</span>
+                        <p class="hint">
+                          This submits a real review on #{pull.number} in {owner}/{name}. GitHub
+                          records the reviewer identity from your token and cannot undo it from GRAFT.
+                        </p>
+                        <div class="row">
+                          <button class="btn ghost" onclick={() => (reviewConfirm = false)} disabled={reviewSaving}>Back</button>
+                          <button class="btn primary" onclick={() => void submitReview()} disabled={reviewSaving}>
+                            {reviewSaving ? "Submitting…" : `Confirm ${reviewActionLabel(reviewEvent).toLowerCase()}`}
+                          </button>
+                        </div>
+                      </div>
                     {:else}
-                      <p class="hint">No textual diff (binary or too large).</p>
+                      <div class="review-actions">
+                        <span class="hint">Select a diff line to leave an inline comment. Reviews and comments are external writes and ask for confirmation.</span>
+                        <button
+                          class="btn"
+                          onclick={() => (reviewConfirm = true)}
+                          disabled={reviewSaving || (reviewEvent !== "APPROVE" && !reviewBody.trim())}
+                        >
+                          {reviewActionLabel(reviewEvent)}
+                        </button>
+                      </div>
                     {/if}
                   </div>
-                {/each}
+
+                  {#if commentTarget}
+                    <div class="inline-review-form">
+                      <div class="review-top">
+                        <span class="mono-label">inline comment</span>
+                        <span class="mono faint">{commentTarget.path}:{commentTarget.line} · {commentTarget.side}</span>
+                      </div>
+                      <textarea
+                        class="field review-body"
+                        bind:value={commentBody}
+                        maxlength="65536"
+                        placeholder="Comment on this diff line…"
+                        aria-label="Inline review comment"
+                        disabled={commentSaving}
+                      ></textarea>
+                      {#if commentError}<p class="error">{commentError}</p>{/if}
+                      <div class="review-actions">
+                        <span class="hint">Posting targets commit {pull.headSha.slice(0, 7)}.</span>
+                        <button class="btn ghost" onclick={() => (commentTarget = null)} disabled={commentSaving}>Cancel</button>
+                        <button class="btn primary" onclick={() => void submitPullComment()} disabled={commentSaving || !commentBody.trim()}>
+                          {commentSaving ? "Posting…" : "Post comment"}
+                        </button>
+                      </div>
+                    </div>
+                  {/if}
+                {:else}
+                  <p class="hint">This pull request is {pull.merged ? "merged" : pull.state}; new reviews and comments are disabled.</p>
+                {/if}
+
+                <DiffView
+                  files={pullDetail.files}
+                  comments={pullComments}
+                  commentable={pull.state === "open"}
+                  oncomment={beginPullComment}
+                />
               {/if}
             </div>
           {:else if pullsLoading && pulls.length === 0}
@@ -1627,46 +1840,91 @@
     white-space: pre-wrap;
   }
 
-  .diff-file {
+  .review-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 7px 8px;
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    overflow: hidden;
+    background: var(--bg-elev);
   }
 
-  .diff-head {
+  .review-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    font-size: 10px;
+  }
+
+  .review-item p {
+    flex-basis: 100%;
+    margin: 1px 0 0;
+    color: var(--text-muted);
+    line-height: 1.5;
+    white-space: pre-wrap;
+  }
+
+  .review-box,
+  .inline-review-form {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+
+  .inline-review-form {
+    border-left: 2px solid var(--accent);
+  }
+
+  .review-top {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
-    padding: 4px 8px;
-    background: var(--bg-elev);
-    border-bottom: 1px solid var(--border);
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .review-top .field {
+    height: 22px;
+    width: 145px;
     font-size: 9.5px;
   }
 
-  .diff-head span:first-child {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .review-body {
+    height: 54px;
+    padding: 5px 7px;
+    resize: vertical;
+    font-size: 10px;
+    line-height: 1.45;
   }
 
-  .add {
-    color: var(--ok);
+  .review-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 5px;
+    flex-wrap: wrap;
   }
 
-  .del {
-    color: var(--danger);
+  .review-actions .hint {
+    flex: 1;
+    min-width: 150px;
+    text-align: left;
   }
 
-  .patch {
-    margin: 0;
-    padding: 7px 9px;
-    font-family: var(--font-mono);
-    font-size: 9.5px;
-    line-height: 1.5;
-    color: var(--text-muted);
-    overflow-x: auto;
-    white-space: pre;
+  .review-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 7px;
+    border: 1px dashed color-mix(in srgb, var(--warn) 45%, var(--border));
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--warn) 5%, transparent);
   }
 
   .load-more {

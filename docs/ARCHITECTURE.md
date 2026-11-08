@@ -17,8 +17,11 @@
 │  commands.rs   thin command handlers, validation, errors      │
 │  db.rs         SQLite, migrations, queries                    │
 │  tools.rs      environment probing                            │
-│  github.rs     auth, repos, search, issues, notifications      │
+│  github.rs     auth, repos, search, reviews, issues            │
 │  profile.rs    live profile snapshot + README renderer        │
+│  watchtower.rs favourites, polling, visits, radar discovery   │
+│  terminal.rs   portable-pty sessions over Tauri channels      │
+│  library.rs    saved searches, collections and local notes    │
 │  git.rs        repository inspection + explicit Git writes     │
 │  secrets.rs    keyring token custody                          │
 │  extract/      (Phase 4) repository analysis                  │
@@ -40,18 +43,26 @@ Rules that keep this maintainable:
 | Path | Purpose |
 | ---- | ------- |
 | `src/App.svelte` | shell composition, keyboard shortcuts, boot sequence |
-| `src/views/` | Home, Projects, Repositories, Repository, ProfileStudio, Settings, ModuleView |
-| `src/lib/state/` | `appearance`, `nav`, `dashboard`, `github`, `notifications`, `sync`, `session`, `ui` |
+| `src/views/` | Home, Projects, Repositories, Repository, Terminal, Review, Explore, Collections, ProfileStudio, Watchtower, Settings, ModuleView |
+| `src/lib/state/` | `appearance`, `nav`, `dashboard`, `github`, `notifications`, `sync`, `session`, `terminal`, `watchtower`, `library`, `ui` |
 | `src-tauri/src/schema/` | numbered SQL migrations, embedded with `include_str!` |
 | `~/.local/share/dev.graft.desktop/graft.db` | local database (WAL) |
 | `~/.local/share/dev.graft.desktop/` | app data root (Tauri `app_data_dir`) |
 
-## Data model (schema 1)
+## Data model (schema 4)
 
 ```sql
 settings(key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER)
 projects(id INTEGER PK, name TEXT, path TEXT, description TEXT,
          created_at INTEGER, updated_at INTEGER)
+watch_repos(id INTEGER PK, owner TEXT, name TEXT, full_name TEXT UNIQUE, ...)
+watch_events(id INTEGER PK, repo_id INTEGER, category TEXT, title TEXT, ...)
+saved_searches(id INTEGER PK, name TEXT, query TEXT, language TEXT, ...)
+collections(id INTEGER PK, name TEXT, description TEXT, ...)
+collection_repos(id INTEGER PK, collection_id INTEGER REFERENCES collections(id),
+                 full_name TEXT, status TEXT, notes TEXT, ...)
+repo_visits(full_name TEXT PK, owner TEXT, name TEXT, language TEXT, topics TEXT,
+            visit_count INTEGER, last_visited_at INTEGER, ...)
 ```
 
 Migrations are append-only: add `schema/00N_*.sql`, bump `SCHEMA_VERSION`, add an
@@ -108,7 +119,11 @@ Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`
 | `github_repo_commits` | `owner, repo, gitRef, page` | `RepoCommit[]` (40 per page) |
 | `github_repo_commit` | `owner, repo, sha` | `RepoCommitDetail` with per-file patches |
 | `github_repo_pulls` | `owner, repo, state` | `RepoPull[]` (`open`, `closed`, `all`) |
-| `github_repo_pull` | `owner, repo, number` | `RepoPullDetail` with files |
+| `github_repo_pull` | `owner, repo, number` | `RepoPullDetail` with files and `headSha` |
+| `github_repo_pull_reviews` | `owner, repo, number` | `RepoPullReview[]` |
+| `github_repo_pull_comments` | `owner, repo, number` | `RepoPullComment[]` |
+| `github_submit_pull_review` | `owner, repo, number, event, body` | `RepoPullReview` — confirmed external write |
+| `github_create_pull_comment` | `owner, repo, number, body, commitId, path, line, side` | `RepoPullComment` — confirmed external write |
 | `github_repo_issues` | `owner, repo, state` | `RepoIssue[]` (pull requests excluded) |
 | `github_create_issue` | `owner, repo, title, body` | `RepoIssue` |
 | `github_fork` | `owner, repo` | `ForkResult` |
@@ -128,6 +143,24 @@ Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`
 | `git_commit` | `path, message, stageAll` | `GitActionResult` (optionally stages first) |
 | `git_create_branch` | `path, name, switch` | `GitActionResult` |
 | `git_switch_branch` | `path, name` | `GitActionResult` |
+| `watchtower_snapshot` | — | `WatchtowerSnapshot` (repos, events, unread) |
+| `watchtower_watch` | `owner, repo` | `WatchtowerRepo` |
+| `watchtower_unwatch` | `id` | `void` |
+| `watchtower_poll` | `categories` | `WatchtowerPoll` (conditional requests, new events, errors) |
+| `watchtower_mark_read` | `id \| null` | unread count |
+| `watchtower_discover` | — | `WatchtowerDiscovery` (live stars, local visits, derived recommendations, per-source errors) |
+| `watchtower_record_visit` | `repo` metadata | `void` — local upsert; increments visit count |
+| `terminal_environment` | — | available shells and default cwd |
+| `terminal_start` | `cwd, shell, cols, rows, onEvent` | `TerminalSessionInfo` over a Tauri channel |
+| `terminal_write` / `terminal_resize` / `terminal_close` | session args | `void` |
+| `explore_saved_searches` | — | `SavedSearch[]` |
+| `explore_save_search` | `name, query, language, topic, author, sort` | `SavedSearch` |
+| `explore_delete_search` | `id` | `void` |
+| `collections_list` / `collections_create` / `collections_delete` | collection args | `Collection[]` / `Collection` / `void` |
+| `collection_detail` | `id` | `CollectionDetail` |
+| `collection_add_repo` | `collectionId, owner, repo` | `CollectionRepo` (metadata read from GitHub) |
+| `collection_update_repo` | `id, status, notes` | `CollectionRepo` |
+| `collection_remove_repo` | `id` | `void` |
 
 Serde maps snake_case fields to camelCase for JS. GitHub payloads deserialize from
 the API's snake_case and serialize with `rename_all(serialize = "camelCase")`. Bump this table when adding a
@@ -157,7 +190,17 @@ command, and add the matching wrapper in `lib/api.ts`.
   message. GitHub remains the final authority.
 - The notification centre is local state in SQLite settings; opening an item can only
   navigate inside GRAFT and never performs a write. GitHub's unread notifications are
-  imported read-only and are never marked read on github.com.
+  imported read-only and are never marked read on github.com. Watchtower stores only
+  favourite slugs, alert metadata and local visit counts; polling and discovery are
+  read-only. Starred repositories come from `/user/starred`; GRAFT never stars or
+  unstars a repository for the radar. Similar repositories are public GitHub search
+  results, clearly derived from local interests rather than presented as curated data.
+- Review approvals, change requests and inline comments are separate external writes
+  with an explicit confirmation step. The Rust side validates the review event, file
+  path, head commit, diff side and line before calling GitHub.
+- Terminal sessions are owned by Rust. The shell path and working directory are
+  validated, output is streamed over a per-session channel, and closing a tab kills
+  its child process. The webview never spawns a process directly.
 - Status changes are a separate confirmed external write. The token must have the
   `user` scope; the Profile Studio can start a device-flow reauthorisation for it.
 - Background sync only reads. It refreshes the active GitHub surface on focus and a

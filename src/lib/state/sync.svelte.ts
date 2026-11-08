@@ -1,5 +1,6 @@
 import { syncGithub } from "./github.svelte";
 import { pollGithubNotifications } from "./notifications.svelte";
+import { pollWatchtower } from "./watchtower.svelte";
 
 let busy = false;
 
@@ -14,6 +15,7 @@ export async function syncAll(force = false): Promise<void> {
   try {
     await syncGithub(force);
     await pollGithubNotifications();
+    await pollWatchtower(force);
   } finally {
     busy = false;
   }

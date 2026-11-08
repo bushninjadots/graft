@@ -7,20 +7,19 @@ review, monitoring, extraction and developer tooling in one lightweight applicat
 It is a native desktop instrument (Tauri 2 + Rust + Svelte 5), not a website in a
 window.
 
-> Status: **Phase 1–3**. Real OAuth device-flow sign-in with the token kept in the
-> system keyring, a live repository list, an in-app repository workspace (README, code,
-> commits with diffs, pull requests, issues, branches), star/fork/clone, editing text
-> files in repositories where you have push access, and Git actions for local
-> projects — fetch, pull, push, commit and branch create/switch. Profile Studio is a
-> visual profile builder: presets and layouts, profile picture, pinned repositories,
-> stats, contribution activity map, achievements, organisations and live README
-> preview, stored as a local draft with explicit publish, plus a live GitHub status
-> editor. Repository discovery searches public GitHub by keyword, language, topic and
-> author. A notification centre keeps local pushes, pulls, checkouts, edits, forks and
-> issues, and imports unread GitHub activity; sync refreshes active data on focus and
-> on a timer. Terminal, review actions, Watchtower, standalone Collections, Extract
-> Studio, AI and plugins remain scheduled phases and render explicit planned modules —
-> never fake data. See [`docs/PLAN.md`](docs/PLAN.md).
+> Status: **Phase 1–3 complete**. Real OAuth device-flow sign-in with the token kept in
+> the system keyring, a live repository list, an in-app repository workspace (README,
+> code, commits, pull requests, issues, branches), star/fork/clone, editing text files
+> where you have push access, and Git actions for local projects. A real PTY terminal
+> runs fish, bash or zsh in project directories. Reviewers can use unified or
+> side-by-side diffs, approve, request changes and leave inline comments after an
+> explicit confirmation. Profile Studio builds and publishes the profile README.
+> Explore searches public GitHub and saves queries; Collections keeps a local library
+> with statuses and notes. Watchtower polls favourite repositories with conditional
+> requests, stores alert history in SQLite, sends native notifications when the window
+> is hidden and runs background monitoring only when opted in. Extract Studio, AI and
+> plugins remain scheduled phases and render explicit planned modules — never fake
+> data. See [`docs/PLAN.md`](docs/PLAN.md).
 
 ![GRAFT repository workspace](docs/screenshots/repository.png)
 
@@ -32,13 +31,19 @@ window.
 - **Repositories**: public and private repositories from the GitHub REST API, with
   filter, pagination, language, stars, visibility and archived state. Links open in
   your browser; GRAFT never embeds a GitHub webpage.
-- **Explore**: search public GitHub repositories from the Repositories view by
-  keyword, language, topic and author. Quick topics include Hyprland, ricing, Linux,
-  Arch, dotfiles, Wayland, NixOS and Rust; results show topics, language and stars and
-  open straight into the repository workspace.
+- **Explore**: a standalone search surface for public GitHub repositories by
+  keyword, language, topic and author, with saved searches in SQLite. Quick topics
+  include Hyprland, ricing, Linux, Arch, dotfiles, Wayland, NixOS and Rust; results
+  show topics, language and stars and open straight into the repository workspace.
+- **Collections**: a local library of repositories with multiple collections,
+  statuses (want to try, studying, using, contributing, archived) and per-repository
+  notes. Metadata is read from GitHub; the library itself stays local.
+- **Terminal**: real PTY sessions through `portable-pty` and xterm.js. Pick a linked
+  project directory and fish, bash or zsh; tabs stay alive while navigating GRAFT.
 - **Repository workspace**: README, directory tree, file text, branches, commit
-  history with diffs, pull requests with descriptions and file diffs, and issues
-  with descriptions and labels — read inside GRAFT instead of a browser tab.
+  history with a lane-based branch graph, pull requests with unified or side-by-side
+  diffs, inline review comments, approvals, change requests, and issues — read and
+  reviewed inside GRAFT instead of a browser tab.
 - **Editing**: text files can be edited and committed from the Code tab when the
   GitHub API reports push access. The commit is a two-step confirmation with the
   branch, path and message visible before anything is written.
@@ -51,10 +56,19 @@ window.
   (mentions, reviews, issues, pull requests, workflow activity). Each item stays until
   opened, then routes to the affected repository tab; the brief toast is also
   clickable. Opening a notification locally never marks it read on GitHub.
+- **Code Review**: a repository chooser opens pull-request review with review history,
+  inline comment targets on either diff side, and unified or side-by-side rendering.
+  Approve, request changes and comments are external writes and require confirmation.
+- **Watchtower**: a repository radar with your live GitHub stars, local favourites,
+  frequently visited repositories and similar-repository recommendations derived from
+  your languages and topics. Favourite up to 30 repositories, poll repo events and
+  failed Actions runs with ETag-conditional requests, filter eight alert categories,
+  keep local history, mark alerts read, and opt into throttled background monitoring
+  (default off). Native notifications are sent only while the window is hidden.
 - **Sync**: active GitHub data refreshes when the window gains focus, every 90 seconds
   while signed in, and from the TopBar sync button; repository and profile views have
-  their own Refresh action. Sync is read-only — local Git work is only sent online by
-  your explicit push.
+  their own Refresh action. Sync and Watchtower polling are read-only — local Git work
+  is only sent online by your explicit push.
 - **Repository layouts**: list, card and compact views, remembered locally.
 - **Profile Studio**: a visual builder for the GitHub profile README — layouts
   (banner, split, compact, terminal), five presets, profile picture, pins, stats,
@@ -145,19 +159,22 @@ was added can be reauthorised from Profile Studio when setting a status.
 
 ```
 src/                  Svelte 5 interface
-  views/              Home, Projects, Repositories, Repository, ProfileStudio, Settings, ModuleView
-  lib/components/     shell, palette and dashboard panels
-  lib/state/          reactive state (appearance, nav, dashboard, github, notifications, sync, session, ui)
+  views/              Home, Projects, Repositories, Repository, Terminal, Review,
+                      Explore, Collections, ProfileStudio, Watchtower, Settings, ModuleView
+  lib/components/     shell, palette, dashboard panels, diff and graph renderers
+  lib/state/          reactive state (appearance, nav, dashboard, github, notifications,
+                      sync, session, terminal, watchtower, library, ui)
   lib/api.ts          the only IPC surface
-src-tauri/src/        Rust engine (commands, db, schema, github, git, secrets, tools)
-  src-tauri/src/schema/  versioned SQL migrations
+src-tauri/src/        Rust engine (commands, db, schema, github, git, secrets, tools,
+                      terminal, watchtower, library)
+  src-tauri/src/schema/  versioned SQL migrations (schema 4)
 docs/                 plan, architecture, design, product brief
 scripts/              icon rendering
 ```
 
 ## Storage and security
 
-- Database: `~/.local/share/dev.graft.desktop/graft.db` (SQLite, WAL).
+- Database: `~/.local/share/dev.graft.desktop/graft.db` (SQLite, WAL, schema 4).
 - Secrets: GitHub tokens live in the system keyring (`dev.graft.desktop` service).
   They are never written to SQLite, logs, localStorage or the webview.
 - Network: all GitHub requests are made by Rust. The webview CSP allows no external

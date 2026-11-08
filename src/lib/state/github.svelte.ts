@@ -82,14 +82,45 @@ export function isSignedIn(): boolean {
   return github.status?.signedIn ?? false;
 }
 
-/** Opens the repository detail surface for `repo`. */
+/** Opens the repository detail surface for `repo` and records a local visit. */
 export function openRepo(repo: GithubRepo): void {
   github.selected = repo;
+  void api.recordRepoVisit(repo).catch(() => undefined);
   navigate("repository");
 }
 
 export function closeRepo(): void {
   navigate("repositories");
+}
+
+/** Opens a repository by coordinate after reading its live metadata. */
+export async function openRepoByCoords(owner: string, repo: string): Promise<void> {
+  try {
+    const detail = await api.repoDetail(owner, repo);
+    const selected: GithubRepo = {
+      id: detail.id,
+      name: detail.name,
+      fullName: detail.fullName,
+      private: detail.private,
+      fork: detail.fork,
+      archived: detail.archived,
+      description: detail.description,
+      language: detail.language,
+      topics: detail.topics ?? [],
+      stargazersCount: detail.stargazersCount,
+      forksCount: detail.forksCount,
+      updatedAt: detail.updatedAt,
+      pushedAt: detail.pushedAt,
+      defaultBranch: detail.defaultBranch,
+      htmlUrl: detail.htmlUrl,
+      owner: { login: detail.owner?.login ?? owner },
+    };
+    github.selected = selected;
+    void api.recordRepoVisit(selected).catch(() => undefined);
+    navigate("repository");
+  } catch (cause) {
+    notify(cause instanceof Error ? cause.message : String(cause), "danger");
+  }
 }
 
 export async function loadGithub(): Promise<void> {

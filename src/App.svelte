@@ -10,6 +10,11 @@
   import Repositories from "./views/Repositories.svelte";
   import Repository from "./views/Repository.svelte";
   import ProfileStudio from "./views/ProfileStudio.svelte";
+  import Watchtower from "./views/Watchtower.svelte";
+  import TerminalView from "./views/Terminal.svelte";
+  import Explore from "./views/Explore.svelte";
+  import Collections from "./views/Collections.svelte";
+  import Review from "./views/Review.svelte";
   import SettingsView from "./views/Settings.svelte";
   import ModuleView from "./views/ModuleView.svelte";
   import { navById } from "./lib/nav";
@@ -19,6 +24,7 @@
   import { loadDashboard } from "./lib/state/dashboard.svelte";
   import { boot, refreshTools, session } from "./lib/state/session.svelte";
   import { syncAll } from "./lib/state/sync.svelte";
+  import { loadWatchtower } from "./lib/state/watchtower.svelte";
 
   const active = $derived(
     navById(ui.view === "repository" ? "repositories" : ui.view) ?? navById("home")!,
@@ -29,7 +35,7 @@
 
     void (async () => {
       await boot();
-      await Promise.all([loadAppearance(), loadNav(), loadDashboard()]);
+      await Promise.all([loadAppearance(), loadNav(), loadDashboard(), loadWatchtower()]);
       await refreshTools();
       if (session.online) void syncAll(true);
     })();
@@ -113,12 +119,22 @@
             <Home />
           {:else if ui.view === "projects"}
             <Projects />
+          {:else if ui.view === "terminal"}
+            <TerminalView />
           {:else if ui.view === "repositories"}
             <Repositories />
           {:else if ui.view === "repository"}
             <Repository />
           {:else if ui.view === "profile"}
             <ProfileStudio />
+          {:else if ui.view === "explore"}
+            <Explore />
+          {:else if ui.view === "collections"}
+            <Collections />
+          {:else if ui.view === "review"}
+            <Review />
+          {:else if ui.view === "watchtower"}
+            <Watchtower />
           {:else if ui.view === "settings"}
             <SettingsView />
           {:else}

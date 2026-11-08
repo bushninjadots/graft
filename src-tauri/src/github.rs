@@ -8,13 +8,13 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::State;
 
-const API: &str = "https://api.github.com";
+pub(crate) const API: &str = "https://api.github.com";
 const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const CLIENT_ID_KEY: &str = "github.clientId";
 const PROFILE_KEY: &str = "github.profile";
 const USER_AGENT: &str = "GRAFT/0.1.0 (Linux; Tauri)";
-const API_VERSION: &str = "2022-11-28";
+pub(crate) const API_VERSION: &str = "2022-11-28";
 const SCOPE: &str = "repo read:user user";
 const PER_PAGE: u32 = 100;
 const TIMEOUT: Duration = Duration::from_secs(25);
@@ -116,7 +116,7 @@ pub struct RepoPage {
     pub has_more: bool,
 }
 
-fn client() -> Result<reqwest::Client, String> {
+pub(crate) fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .timeout(TIMEOUT)
@@ -134,7 +134,7 @@ fn truncate(value: &str, limit: usize) -> String {
     }
 }
 
-async fn describe_error(response: reqwest::Response) -> String {
+pub(crate) async fn describe_error(response: reqwest::Response) -> String {
     let status = response.status();
     let remaining = response
         .headers()
@@ -808,6 +808,7 @@ pub struct RepoCommit {
     pub author_avatar: Option<String>,
     pub date: Option<String>,
     pub html_url: String,
+    pub parents: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -860,6 +861,7 @@ pub struct RepoPull {
     pub changed_files: u64,
     pub head_ref: String,
     pub base_ref: String,
+    pub head_sha: String,
     pub html_url: String,
 }
 
@@ -884,6 +886,33 @@ pub struct RepoPullDetail {
     pub files: Vec<RepoPullFile>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoPullReview {
+    pub id: u64,
+    pub state: String,
+    pub body: String,
+    pub author_login: String,
+    pub author_avatar: String,
+    pub submitted_at: Option<String>,
+    pub html_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoPullComment {
+    pub id: u64,
+    pub body: String,
+    pub path: String,
+    pub line: Option<u64>,
+    pub original_line: Option<u64>,
+    pub side: Option<String>,
+    pub author_login: String,
+    pub author_avatar: String,
+    pub created_at: String,
+    pub html_url: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "camelCase"))]
 pub struct ForkResult {
@@ -893,11 +922,11 @@ pub struct ForkResult {
     pub clone_url: String,
 }
 
-fn token() -> Result<String, String> {
+pub(crate) fn token() -> Result<String, String> {
     secrets::load()?.ok_or_else(|| "Sign in to GitHub first.".to_string())
 }
 
-fn coords(owner: &str, repo: &str) -> Result<(String, String), String> {
+pub(crate) fn coords(owner: &str, repo: &str) -> Result<(String, String), String> {
     let valid = |value: &str| {
         (1..=120).contains(&value.len())
             && value
@@ -931,7 +960,7 @@ fn encode_path(path: &str) -> String {
         .join("/")
 }
 
-async fn get_json(token: &str, url: &str) -> Result<serde_json::Value, String> {
+pub(crate) async fn get_json(token: &str, url: &str) -> Result<serde_json::Value, String> {
     let response = api_get(token, url).await?;
     response
         .json()
@@ -1499,6 +1528,12 @@ pub async fn github_repo_commits(
         commit: RawCommitInfo,
         #[serde(default)]
         author: Option<RawUser>,
+        #[serde(default)]
+        parents: Vec<RawParent>,
+    }
+    #[derive(Deserialize)]
+    struct RawParent {
+        sha: String,
     }
     #[derive(Deserialize)]
     struct RawCommitInfo {
@@ -1546,6 +1581,7 @@ pub async fn github_repo_commits(
             author_login: entry.author.as_ref().map(|user| user.login.clone()),
             author_avatar: entry.author.map(|user| user.avatar_url),
             html_url: entry.html_url,
+            parents: entry.parents.into_iter().map(|parent| parent.sha).collect(),
         })
         .collect())
 }
@@ -1685,6 +1721,11 @@ fn pull_from_value(value: &serde_json::Value) -> RepoPull {
             .and_then(|v| v.as_str())
             .unwrap_or("?")
             .to_string(),
+        head_sha: value
+            .pointer("/head/sha")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
         html_url: value
             .get("html_url")
             .and_then(|v| v.as_str())
@@ -1742,6 +1783,232 @@ pub async fn github_repo_pull(
         pull: pull_from_value(&pull_value),
         files,
     })
+}
+
+fn review_from_value(value: &serde_json::Value) -> RepoPullReview {
+    RepoPullReview {
+        id: value.get("id").and_then(|v| v.as_u64()).unwrap_or(0),
+        state: value
+            .get("state")
+            .and_then(|v| v.as_str())
+            .unwrap_or("COMMENTED")
+            .to_string(),
+        body: value
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        author_login: value
+            .pointer("/user/login")
+            .and_then(|v| v.as_str())
+            .unwrap_or("ghost")
+            .to_string(),
+        author_avatar: value
+            .pointer("/user/avatar_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        submitted_at: value
+            .get("submitted_at")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        html_url: value
+            .get("html_url")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+    }
+}
+
+fn pull_comment_from_value(value: &serde_json::Value) -> RepoPullComment {
+    RepoPullComment {
+        id: value.get("id").and_then(|v| v.as_u64()).unwrap_or(0),
+        body: value
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        path: value
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        line: value.get("line").and_then(|v| v.as_u64()),
+        original_line: value.get("original_line").and_then(|v| v.as_u64()),
+        side: value
+            .get("side")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        author_login: value
+            .pointer("/user/login")
+            .and_then(|v| v.as_str())
+            .unwrap_or("ghost")
+            .to_string(),
+        author_avatar: value
+            .pointer("/user/avatar_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        created_at: value
+            .get("created_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        html_url: value
+            .get("html_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    }
+}
+
+fn review_event(raw: &str) -> Result<&'static str, String> {
+    match raw.trim().to_ascii_uppercase().as_str() {
+        "APPROVE" => Ok("APPROVE"),
+        "REQUEST_CHANGES" => Ok("REQUEST_CHANGES"),
+        "COMMENT" => Ok("COMMENT"),
+        _ => Err("Choose approve, request changes or comment.".to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn github_repo_pull_reviews(
+    owner: String,
+    repo: String,
+    number: u64,
+) -> Result<Vec<RepoPullReview>, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    let value = get_json(
+        &token,
+        &format!("{API}/repos/{owner}/{repo}/pulls/{number}/reviews?per_page=50"),
+    )
+    .await?;
+    value
+        .as_array()
+        .ok_or_else(|| "GitHub returned an unexpected review list.".to_string())
+        .map(|items| items.iter().map(review_from_value).collect())
+}
+
+#[tauri::command]
+pub async fn github_repo_pull_comments(
+    owner: String,
+    repo: String,
+    number: u64,
+) -> Result<Vec<RepoPullComment>, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    let value = get_json(
+        &token,
+        &format!("{API}/repos/{owner}/{repo}/pulls/{number}/comments?per_page=100"),
+    )
+    .await?;
+    value
+        .as_array()
+        .ok_or_else(|| "GitHub returned an unexpected review comment list.".to_string())
+        .map(|items| items.iter().map(pull_comment_from_value).collect())
+}
+
+/// Submits a real pull request review. The UI confirms before calling.
+#[tauri::command]
+pub async fn github_submit_pull_review(
+    owner: String,
+    repo: String,
+    number: u64,
+    event: String,
+    body: String,
+) -> Result<RepoPullReview, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    let event = review_event(&event)?;
+    if body.len() > 65_536 {
+        return Err("Review text must stay under 64 KB.".to_string());
+    }
+    if event != "APPROVE" && body.trim().is_empty() {
+        return Err("Add a review comment before requesting changes or commenting.".to_string());
+    }
+    let mut payload = serde_json::json!({ "event": event });
+    if !body.trim().is_empty() {
+        payload["body"] = serde_json::Value::String(body.trim().to_string());
+    }
+    let response = client()?
+        .post(format!("{API}/repos/{owner}/{repo}/pulls/{number}/reviews"))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", API_VERSION)
+        .bearer_auth(&token)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Cannot reach api.github.com: {e}"))?;
+    if !response.status().is_success() {
+        return Err(describe_error(response).await);
+    }
+    let value: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("GitHub returned an unreadable review: {e}"))?;
+    Ok(review_from_value(&value))
+}
+
+/// Creates an inline review comment on a line in the pull request diff.
+#[tauri::command]
+pub async fn github_create_pull_comment(
+    owner: String,
+    repo: String,
+    number: u64,
+    body: String,
+    commit_id: String,
+    path: String,
+    line: u64,
+    side: String,
+) -> Result<RepoPullComment, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    if body.trim().is_empty() {
+        return Err("Write a comment first.".to_string());
+    }
+    if body.len() > 65_536 {
+        return Err("Comments must stay under 64 KB.".to_string());
+    }
+    let clean = path.trim().trim_start_matches('/');
+    if !valid_file_path(clean) {
+        return Err("That file path is not valid for a pull request comment.".to_string());
+    }
+    let commit_id = commit_id.trim();
+    if commit_id.len() < 7 || !commit_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("The pull request head commit is missing.".to_string());
+    }
+    let side = match side.trim().to_ascii_uppercase().as_str() {
+        "LEFT" => "LEFT",
+        "RIGHT" => "RIGHT",
+        _ => return Err("Comment side must be LEFT or RIGHT.".to_string()),
+    };
+    if !(1..=1_000_000).contains(&line) {
+        return Err("Choose a valid diff line.".to_string());
+    }
+    let payload = serde_json::json!({
+        "body": body.trim(),
+        "commit_id": commit_id,
+        "path": clean,
+        "line": line,
+        "side": side,
+    });
+    let response = client()?
+        .post(format!("{API}/repos/{owner}/{repo}/pulls/{number}/comments"))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", API_VERSION)
+        .bearer_auth(&token)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Cannot reach api.github.com: {e}"))?;
+    if !response.status().is_success() {
+        return Err(describe_error(response).await);
+    }
+    let value: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("GitHub returned an unreadable comment: {e}"))?;
+    Ok(pull_comment_from_value(&value))
 }
 
 #[tauri::command]

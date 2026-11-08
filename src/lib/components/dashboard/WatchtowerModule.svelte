@@ -1,29 +1,61 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import PanelSection from "../PanelSection.svelte";
+  import Icon from "../Icon.svelte";
+  import { navigate } from "../../state/ui.svelte";
+  import { relativeTime } from "../../format";
+  import { loadWatchtower, watchtower } from "../../state/watchtower.svelte";
+
+  const lastCheck = $derived(
+    watchtower.lastPollAt
+      ? relativeTime(Math.floor(watchtower.lastPollAt / 1000))
+      : "never",
+  );
+
+  onMount(() => {
+    if (!watchtower.loaded) void loadWatchtower();
+  });
 </script>
 
-<PanelSection title="Watchtower" hint="monitoring">
+<PanelSection title="Watchtower" hint="repository monitoring">
   {#snippet action()}
-    <span class="badge warn">Phase 2</span>
+    <span class="badge" class:ok={watchtower.enabled} class:warn={!watchtower.enabled}>
+      {watchtower.enabled ? "watching" : "paused"}
+    </span>
   {/snippet}
 
   <div class="status">
-    <span class="dot" aria-hidden="true"></span>
-    <span class="label">Monitoring is off</span>
-    <span class="mono-label">no worker running</span>
+    <span class="dot" class:on={watchtower.enabled}></span>
+    <span class="label">
+      {watchtower.enabled ? "Monitoring is on" : "Monitoring is off"}
+    </span>
+    <span class="mono-label">{watchtower.loading ? "loading…" : `checked ${lastCheck}`}</span>
   </div>
 
   <dl class="counts">
-    <div><dt>Watched repositories</dt><dd class="mono">0</dd></div>
-    <div><dt>Unread alerts</dt><dd class="mono">0</dd></div>
-    <div><dt>Poll interval</dt><dd class="mono">not set</dd></div>
+    <div><dt>Watched repositories</dt><dd class="mono">{watchtower.repos.length}</dd></div>
+    <div><dt>Unread alerts</dt><dd class="mono" class:accent={watchtower.unread > 0}>{watchtower.unread}</dd></div>
+    <div><dt>Alert categories</dt><dd class="mono">{watchtower.categories.length}</dd></div>
   </dl>
 
-  <p class="note">
-    Watchtower will favourite any repository — yours or someone else's — and report releases,
-    commits, pull requests, issues and workflow failures. Polling stays conditional and
-    rate-limit aware, and the background worker is opt-in.
-  </p>
+  {#if watchtower.error}
+    <p class="note tone-danger">{watchtower.error}</p>
+  {:else}
+    <p class="note">
+      {#if watchtower.repos.length === 0}
+        Add a favourite from Watchtower or the repository workspace. The first check records a
+        baseline, so GRAFT never replays old activity as new.
+      {:else}
+        History is stored locally. Background checks are conditional and only run while
+        monitoring is enabled.
+      {/if}
+    </p>
+  {/if}
+
+  <button class="btn ghost open" onclick={() => navigate("watchtower")}>
+    <Icon name="radar" size={13} />
+    Open Watchtower
+  </button>
 </PanelSection>
 
 <style>
@@ -40,6 +72,10 @@
     height: 6px;
     border-radius: 50%;
     background: var(--text-faint);
+  }
+
+  .dot.on {
+    background: var(--ok);
   }
 
   .label {
@@ -71,9 +107,18 @@
     font-size: 10.5px;
   }
 
+  dd.accent {
+    color: var(--accent);
+  }
+
   .note {
     font-size: 10.5px;
     line-height: 1.5;
     color: var(--text-faint);
+  }
+
+  .open {
+    width: 100%;
+    margin-top: 9px;
   }
 </style>

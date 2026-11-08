@@ -22,6 +22,11 @@
 
   onMount(() => {
     void loadNotifications();
+    const onKeydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") open = false;
+    };
+    window.addEventListener("keydown", onKeydown);
+    return () => window.removeEventListener("keydown", onKeydown);
   });
 
   function choose(notification: (typeof notifications.items)[number]): void {
@@ -69,11 +74,12 @@
         onclick={() => (open = !open)}
       >
         <Icon name="bell" size={14} />
-        {#if unread > 0}<span class="unread">{unread > 99 ? "99+" : unread}</span>{/if}
+        {#if unread > 0}<span class="unread-badge">{unread > 99 ? "99+" : unread}</span>{/if}
       </button>
 
       {#if open}
-        <div class="panel feed">
+        <button class="feed-scrim" aria-label="Close notifications" onclick={() => (open = false)}></button>
+        <div class="panel feed" role="dialog" aria-label="Notifications">
           <div class="feed-head">
             <span class="mono-label">notifications · {notifications.items.length}</span>
             <div class="feed-actions">
@@ -220,7 +226,7 @@
     }
   }
 
-  .unread {
+  .unread-badge {
     position: absolute;
     top: -5px;
     right: -5px;
@@ -236,15 +242,25 @@
     text-align: center;
   }
 
+  .feed-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    border: 0;
+    background: transparent;
+    cursor: default;
+  }
+
   .feed {
-    position: absolute;
-    top: 32px;
-    right: 0;
-    z-index: 50;
-    width: 360px;
-    max-height: min(460px, 70vh);
+    position: fixed;
+    top: calc(var(--topbar-h) + 5px);
+    right: 10px;
+    z-index: 61;
+    width: min(380px, calc(100vw - 20px));
+    max-height: calc(100vh - var(--topbar-h) - var(--statusbar-h) - 20px);
     display: flex;
     flex-direction: column;
+    overflow: hidden;
     box-shadow: 0 18px 40px -18px var(--shadow);
   }
 
@@ -283,6 +299,7 @@
 
   .feed-list {
     overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .feed-item {

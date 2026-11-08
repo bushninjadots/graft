@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Core permissions for the GRAFT main window. Feature permissions are granted per plugin as modules land.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "notification:default"]
 }
