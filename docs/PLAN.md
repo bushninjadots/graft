@@ -9,11 +9,15 @@ Architecture: `docs/ARCHITECTURE.md`. Visual system: `docs/DESIGN.md`.
 
 ## Current status
 
-**Phase 1 — GitHub: auth, repository workspace and local Git actions complete.**
-Phase 1a added auth, the repository list and local Git inspection. Phase 1b added the
-in-app repository workspace (README, code tree, commits with diffs, pull requests,
-branches), star/fork/clone, and fetch/pull/push for linked projects. Phase 0
-(foundation) is complete and verified as well.
+**Phase 1–3 complete for the shipped surfaces.** Phase 1a added auth, the repository
+list and local Git inspection. Phase 1b added the in-app repository workspace
+(README, code tree, commits with diffs, pull requests, issues, branches),
+star/fork/clone, and fetch/pull/push for linked projects. Phase 3 now includes the
+visual Profile Studio (live snapshot, presets, pins, stats, activity map,
+achievements, organisations, local draft, explicit publish), repository text-file
+editing with push-access checks, issue listing/creation, a persistent notification
+centre and three repository layouts. Phase 0 (foundation) is complete and verified
+as well.
 
 Delivered in Phase 1a:
 
@@ -31,19 +35,19 @@ Delivered in Phase 1a:
 | 10 | Pull requests with body and file diffs | done |
 | 11 | Star/unstar, fork, clone/download, clone-to-project | done |
 | 12 | Local project fetch / pull / push | done |
-| 13 | Terminal, commit and branch write operations | next (Phase 1b) |
+| 13 | Commit and branch write operations | done (with confirmations) |
 
-Still planned: terminal, commit/branch write operations (with confirmation), ETag
-caching, rate-limit surfacing beyond error messages, issues and releases.
+Still planned: terminal, ETag caching, rate-limit surfacing beyond error messages
+and releases.
 
 ### Verification (Phase 1a)
 
 | Check | Result |
 | ----- | ------ |
 | `svelte-check` | 0 errors, 0 warnings |
-| `vite build` | passes — 248 kB JS / 45 kB CSS (marked + DOMPurify included) |
+| `vite build` | passes — 312 kB JS / 64 kB CSS (builder, notifications and issues included) |
 | `cargo check` | passes |
-| `cargo test` | 11/11 pass (migrations, settings, projects, Git parsing, branch validation, a real commit/branch cycle in a temp repo, device flow, HTTP client, profile publish payload) |
+| `cargo test` | 21/21 pass (migrations, settings, projects, Git parsing, branch validation, a real commit/branch cycle in a temp repo, device flow, HTTP client, profile publish/write payloads, profile snapshot shape and every README section, issues, file-path validation) |
 | Repository API | verified live with a real token: repository list, detail, README and branches rendered in the running window; commits and pull requests fetched with no errors |
 | Keyring round-trip | verified against the live Secret Service on this machine |
 | Visual review | running window captured with `grim`; Repositories sign-in flow inspected |
@@ -165,12 +169,17 @@ choice between an app-only draft and publishing to the GitHub profile README
 repository. Publishing is always explicit; the draft never leaves the machine
 unless the user chooses to sync it.
 
-**Profile Studio shipped first.** The view stores its draft in the SQLite settings
-blob (`profile.draft`, `profile.draftSavedAt`), debounces autosave, renders a
-sanitized preview, and diffs the draft against the live README fetched by Rust. The
-only write is `github_publish_profile`, behind a confirmation dialog showing the
-target repository and commit message. Review actions, issues and the branch graph
-remain open in this phase.
+**Profile Studio shipped as a builder.** The view fetches a live snapshot
+(`github_profile_snapshot`: identity, pins, top repositories, stats, contribution
+calendar, socials, public orgs), stores the design in `profile.design` and renders
+GitHub Markdown in Rust (`profile_render`). It offers five presets, four layouts,
+section reordering, avatar/tagline/bio controls, pins, stats, activity heatmap or
+ASCII map, achievement badges (selected manually because GitHub exposes no
+achievements API), organisations, custom Markdown and badge styling. The generated
+README can be saved into the local `profile.draft`, edited by hand and diffed against
+the live README. The only profile write is `github_publish_profile`, behind a
+confirmation; `github_create_profile_repo` is a separate confirmed action. Review
+actions and the branch graph remain open in this phase.
 
 ---
 

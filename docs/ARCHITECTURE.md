@@ -17,7 +17,8 @@
 │  commands.rs   thin command handlers, validation, errors      │
 │  db.rs         SQLite, migrations, queries                    │
 │  tools.rs      environment probing                            │
-│  github.rs     device flow, API client, repository listing    │
+│  github.rs     device flow, API client, repository + issues    │
+│  profile.rs    live profile snapshot + README renderer        │
 │  git.rs        repository inspection + explicit Git writes     │
 │  secrets.rs    keyring token custody                          │
 │  extract/      (Phase 4) repository analysis                  │
@@ -67,6 +68,10 @@ Settings blobs currently stored:
 | `github.profile` | cached `GithubUser` JSON for offline display |
 | `profile.draft` | Profile Studio Markdown, never uploaded implicitly |
 | `profile.draftSavedAt` | last local draft save (epoch seconds) |
+| `profile.design` | visual builder design JSON |
+| `profile.designSavedAt` | last design save (epoch seconds) |
+| `app.notifications` | local notification centre (max 80, unread state) |
+| `repos.view` | repository layout (`list`, `cards`, `compact`) |
 
 Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`.
 
@@ -100,10 +105,16 @@ Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`
 | `github_repo_commit` | `owner, repo, sha` | `RepoCommitDetail` with per-file patches |
 | `github_repo_pulls` | `owner, repo, state` | `RepoPull[]` (`open`, `closed`, `all`) |
 | `github_repo_pull` | `owner, repo, number` | `RepoPullDetail` with files |
+| `github_repo_issues` | `owner, repo, state` | `RepoIssue[]` (pull requests excluded) |
+| `github_create_issue` | `owner, repo, title, body` | `RepoIssue` |
 | `github_fork` | `owner, repo` | `ForkResult` |
 | `github_set_star` | `owner, repo, starred` | `bool` |
 | `github_profile_readme` | `login` | `ProfileReadme` (`exists`, content, sha, htmlUrl) |
-| `github_publish_profile` | `login, markdown, sha, message` | `PublishResult` — the only upload path |
+| `github_profile_snapshot` | — | live pins, stats, contribution calendar, socials, public orgs |
+| `profile_render` | `design, snapshot` | GitHub-flavoured Markdown (pure renderer) |
+| `github_publish_profile` | `login, markdown, sha, message` | `PublishResult` — the only profile README upload path |
+| `github_create_profile_repo` | `login` | `ProfileRepoResult` — explicit public repo creation |
+| `github_save_file` | `owner, repo, path, content, sha, branch, message` | `FileWriteResult` (push permission required) |
 | `clone_destination` | `owner, repo` | suggested `~/Projects/<owner>-<repo>` path |
 | `clone_repo` | `url, dest` | path (refuses an existing destination) |
 | `git_action` | `path, action` | `GitActionResult` (`fetch`, `pull --ff-only`, `push` only) |
@@ -134,7 +145,13 @@ command, and add the matching wrapper in `lib/api.ts`.
   commit, branch create/switch, fetch, pull and push on directories the user linked;
   branch names are validated before they reach `git`.
 - Profile publishing is a single explicit command behind a confirmation dialog. The
-  draft is stored locally and is never uploaded by any read path.
+  draft is stored locally and is never uploaded by any read path. Creating the
+  profile repository is a separate confirmed command.
+- Repository file editing is offered only when `permissions.push` is true in the repo
+  payload, and commits go through a second confirmation with the branch, path and
+  message. GitHub remains the final authority.
+- The notification centre is local state in SQLite settings; opening an item can only
+  navigate inside GRAFT and never performs a write.
 - Destructive operations (delete project, git reset, extraction) must be confirmed
   in the UI and re-validated in Rust.
 

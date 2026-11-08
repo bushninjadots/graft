@@ -40,12 +40,22 @@
   let tokenError = $state<string | null>(null);
   let showToken = $state(false);
 
+  type RepoView = "list" | "cards" | "compact";
+  let repoView = $state<RepoView>("list");
+
+  function setRepoView(next: RepoView): void {
+    repoView = next;
+    void api.setSetting("repos.view", next).catch(() => undefined);
+  }
+
   $effect(() => {
     if (!clientIdTouched) clientIdInput = savedClientId;
   });
 
   onMount(() => {
     void (async () => {
+      const stored = await api.getSetting("repos.view").catch(() => null);
+      if (stored === "cards" || stored === "compact" || stored === "list") repoView = stored;
       if (!github.status) await loadGithub();
       if (github.status?.signedIn && github.repos.length === 0) await loadRepos(true);
     })();
@@ -360,6 +370,17 @@
       <span class="mono-label">
         {plural(github.repos.length, "repository", "repositories")}
       </span>
+      <div class="view-switch" role="group" aria-label="Repository layout">
+        {#each [["list", "List"], ["cards", "Cards"], ["compact", "Compact"]] as [id, label]}
+          <button
+            class="view-btn"
+            class:active={repoView === id}
+            title={`${label} view`}
+            aria-pressed={repoView === id}
+            onclick={() => setRepoView(id as RepoView)}
+          >{label}</button>
+        {/each}
+      </div>
       <button
         class="btn ghost icon"
         title="Refresh from GitHub"
@@ -393,7 +414,7 @@
     {:else if repos.length === 0}
       <p class="state mono">No repository matches “{github.filter}”.</p>
     {:else}
-      <ul class="repos">
+      <ul class="repos {repoView}">
         {#each repos as repo (repo.id)}
           <li class="panel repo">
             <div class="repo-main">
@@ -673,10 +694,95 @@
     color: var(--text-faint);
   }
 
+  .view-switch {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    flex: none;
+  }
+
+  .view-btn {
+    height: 22px;
+    padding: 0 7px;
+    border: 0;
+    border-right: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-faint);
+    font: inherit;
+    font-size: 9px;
+    cursor: pointer;
+  }
+
+  .view-btn:last-child {
+    border-right: 0;
+  }
+
+  .view-btn.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
   .repos {
     display: flex;
     flex-direction: column;
     gap: 4px;
+  }
+
+  .repos.cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    align-items: stretch;
+  }
+
+  .repos.cards .repo {
+    align-items: flex-start;
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 10px 9px 9px 11px;
+  }
+
+  .repos.cards .repo-desc {
+    display: -webkit-box;
+    line-clamp: 2;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    white-space: normal;
+    overflow: hidden;
+    line-height: 1.45;
+    max-width: none;
+  }
+
+  .repos.cards .repo-facts {
+    flex-wrap: wrap;
+    white-space: normal;
+    gap: 6px 9px;
+    margin-top: 2px;
+  }
+
+  .repos.compact .repo {
+    padding: 4px 8px 4px 10px;
+  }
+
+  .repos.compact .repo-desc {
+    display: none;
+  }
+
+  .repos.compact .repo-title {
+    gap: 5px;
+  }
+
+  .repos.compact .repo-facts {
+    gap: 8px;
+  }
+
+  @media (max-width: 700px) {
+    .repos.cards {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .view-switch {
+      display: none;
+    }
   }
 
   .repo {

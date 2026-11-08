@@ -2,6 +2,7 @@ mod commands;
 mod db;
 mod git;
 mod github;
+mod profile;
 mod secrets;
 mod tools;
 
@@ -59,6 +60,12 @@ pub fn run() {
             github::github_set_star,
             github::github_profile_readme,
             github::github_publish_profile,
+            github::github_save_file,
+            github::github_repo_issues,
+            github::github_create_issue,
+            github::github_create_profile_repo,
+            profile::github_profile_snapshot,
+            profile::profile_render,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start GRAFT");

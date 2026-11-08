@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: https://avatars.githubusercontent.com https://raw.githubusercontent.com https://user-images.githubusercontent.com https://camo.githubusercontent.com; connect-src 'self' ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: https://avatars.githubusercontent.com https://raw.githubusercontent.com https://user-images.githubusercontent.com https://camo.githubusercontent.com https://img.shields.io; connect-src 'self' ipc: http://ipc.localhost"
     }
   },
   "bundle": {

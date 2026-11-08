@@ -500,6 +500,21 @@ pub struct RepoLicense {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoPermissions {
+    #[serde(default)]
+    pub admin: bool,
+    #[serde(default)]
+    pub maintain: bool,
+    #[serde(default)]
+    pub push: bool,
+    #[serde(default)]
+    pub triage: bool,
+    #[serde(default)]
+    pub pull: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "camelCase"))]
 pub struct RepoDetail {
     pub id: u64,
@@ -542,6 +557,8 @@ pub struct RepoDetail {
     pub created_at: Option<String>,
     #[serde(default)]
     pub license: Option<RepoLicense>,
+    #[serde(default)]
+    pub permissions: Option<RepoPermissions>,
     #[serde(default)]
     pub owner: Option<RepoOwnerInfo>,
     #[serde(default, skip_deserializing)]
@@ -900,6 +917,341 @@ pub async fn github_repo_file(
     }
     let value = get_json(&token, &url).await?;
     Ok(file_from_value(&value))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoIssue {
+    pub number: u64,
+    pub title: String,
+    pub state: String,
+    pub body: String,
+    pub author_login: String,
+    pub author_avatar: String,
+    pub labels: Vec<String>,
+    pub comments: u32,
+    pub created_at: String,
+    pub updated_at: String,
+    pub html_url: String,
+}
+
+fn issue_from_value(value: &serde_json::Value) -> RepoIssue {
+    RepoIssue {
+        number: value.get("number").and_then(|v| v.as_u64()).unwrap_or(0),
+        title: value
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        state: value
+            .get("state")
+            .and_then(|v| v.as_str())
+            .unwrap_or("open")
+            .to_string(),
+        body: value
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        author_login: value
+            .pointer("/user/login")
+            .and_then(|v| v.as_str())
+            .unwrap_or("ghost")
+            .to_string(),
+        author_avatar: value
+            .pointer("/user/avatar_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        labels: value
+            .get("labels")
+            .and_then(|v| v.as_array())
+            .map(|labels| {
+                labels
+                    .iter()
+                    .filter_map(|label| label.get("name").and_then(|v| v.as_str()))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        comments: value.get("comments").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        created_at: value
+            .get("created_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        updated_at: value
+            .get("updated_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        html_url: value
+            .get("html_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    }
+}
+
+fn validate_issue(title: &str, body: &str) -> Result<String, String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("An issue needs a title.".to_string());
+    }
+    if title.chars().count() > 256 {
+        return Err("Issue titles must stay under 256 characters.".to_string());
+    }
+    if body.len() > 60_000 {
+        return Err("Issue descriptions must stay under 60 KB.".to_string());
+    }
+    Ok(title.to_string())
+}
+
+#[tauri::command]
+pub async fn github_repo_issues(
+    owner: String,
+    repo: String,
+    state: String,
+) -> Result<Vec<RepoIssue>, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    let state = match state.as_str() {
+        "closed" | "all" | "open" => state,
+        _ => "open".to_string(),
+    };
+    let value = get_json(
+        &token,
+        &format!(
+            "{API}/repos/{owner}/{repo}/issues?state={state}&per_page=50&sort=updated&direction=desc"
+        ),
+    )
+    .await?;
+    let list = value
+        .as_array()
+        .ok_or_else(|| "GitHub returned an unexpected issue list.".to_string())?;
+    Ok(list
+        .iter()
+        .filter(|issue| issue.get("pull_request").is_none())
+        .map(issue_from_value)
+        .collect())
+}
+
+#[tauri::command]
+pub async fn github_create_issue(
+    owner: String,
+    repo: String,
+    title: String,
+    body: String,
+) -> Result<RepoIssue, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    let title = validate_issue(&title, &body)?;
+    let response = client()?
+        .post(format!("{API}/repos/{owner}/{repo}/issues"))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", API_VERSION)
+        .bearer_auth(&token)
+        .json(&serde_json::json!({ "title": title, "body": body }))
+        .send()
+        .await
+        .map_err(|e| format!("Cannot reach api.github.com: {e}"))?;
+    if !response.status().is_success() {
+        return Err(describe_error(response).await);
+    }
+    let value: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("GitHub returned an unreadable issue: {e}"))?;
+    Ok(issue_from_value(&value))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileRepoResult {
+    pub full_name: String,
+    pub html_url: String,
+}
+
+/// Creates the special `<login>/<login>` profile repository. This is a live
+/// write and the UI must confirm it before calling.
+#[tauri::command]
+pub async fn github_create_profile_repo(login: String) -> Result<ProfileRepoResult, String> {
+    let token = token()?;
+    let (login, _) = coords(&login, &login)?;
+    let response = client()?
+        .post(format!("{API}/user/repos"))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", API_VERSION)
+        .bearer_auth(&token)
+        .json(&serde_json::json!({
+            "name": login,
+            "description": "My GitHub profile README",
+            "private": false,
+            "auto_init": true,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Cannot reach api.github.com: {e}"))?;
+
+    if response.status().as_u16() == 422 {
+        return Err(format!(
+            "GitHub refused to create {login}/{login}. A repository with that name may already exist, or the token lacks permission to create repositories."
+        ));
+    }
+    if !response.status().is_success() {
+        return Err(describe_error(response).await);
+    }
+    let value: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("GitHub returned an unreadable repository: {e}"))?;
+    Ok(ProfileRepoResult {
+        full_name: value
+            .get("full_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        html_url: value
+            .get("html_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileWriteResult {
+    pub sha: String,
+    pub commit_sha: String,
+    pub html_url: Option<String>,
+    pub path: String,
+}
+
+fn valid_file_path(path: &str) -> bool {
+    let trimmed = path.trim();
+    !trimmed.is_empty()
+        && trimmed.len() <= 900
+        && !trimmed.starts_with('/')
+        && !trimmed.contains('\u{0}')
+        && !trimmed
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == ".." || segment == ".git")
+}
+
+fn file_write_body(
+    content: &str,
+    sha: Option<&str>,
+    branch: Option<&str>,
+    message: &str,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "message": message,
+        "content": BASE64.encode(content.as_bytes()),
+    });
+    if let Some(sha) = sha.filter(|value| !value.trim().is_empty()) {
+        body["sha"] = serde_json::Value::String(sha.trim().to_string());
+    }
+    if let Some(branch) = branch.filter(|value| !value.trim().is_empty()) {
+        body["branch"] = serde_json::Value::String(branch.trim().to_string());
+    }
+    body
+}
+
+fn file_commit_message(raw: &str, path: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        trim_to(&format!("Update {path}"), 240)
+    } else {
+        trim_to(trimmed, 240)
+    }
+}
+
+/// Writes one text file to a repository branch. GitHub enforces push access;
+/// the UI only offers editing when the repository reports push permission.
+#[tauri::command]
+pub async fn github_save_file(
+    owner: String,
+    repo: String,
+    path: String,
+    content: String,
+    sha: Option<String>,
+    branch: Option<String>,
+    message: String,
+) -> Result<FileWriteResult, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    let clean = path.trim().trim_start_matches('/');
+    if !valid_file_path(clean) {
+        return Err("That file path is not valid for a GitHub repository.".to_string());
+    }
+    if content.len() > 900_000 {
+        return Err("Files saved from GRAFT must stay under 900 KB.".to_string());
+    }
+    let message = file_commit_message(&message, clean);
+    let url = format!(
+        "{API}/repos/{owner}/{repo}/contents/{}",
+        encode_path(clean)
+    );
+    let response = client()?
+        .put(&url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", API_VERSION)
+        .bearer_auth(&token)
+        .json(&file_write_body(
+            &content,
+            sha.as_deref(),
+            branch.as_deref(),
+            &message,
+        ))
+        .send()
+        .await
+        .map_err(|e| format!("Cannot reach api.github.com: {e}"))?;
+
+    match response.status().as_u16() {
+        409 => {
+            return Err(
+                "The file changed on GitHub since it was opened. Reload it and re-apply your edit."
+                    .to_string(),
+            )
+        }
+        404 => {
+            return Err(
+                "GitHub returned 404. The branch or file may have moved, or the token may lack write access."
+                    .to_string(),
+            )
+        }
+        _ => {}
+    }
+    if !response.status().is_success() {
+        return Err(describe_error(response).await);
+    }
+
+    let value: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("GitHub returned an unreadable save response: {e}"))?;
+    Ok(FileWriteResult {
+        sha: value
+            .pointer("/content/sha")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        commit_sha: value
+            .pointer("/commit/sha")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        html_url: value
+            .pointer("/content/html_url")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        path: value
+            .pointer("/content/path")
+            .and_then(|v| v.as_str())
+            .unwrap_or(clean)
+            .to_string(),
+    })
 }
 
 #[tauri::command]
@@ -1399,6 +1751,49 @@ mod tests {
     fn builds_http_client() {
         let client = client();
         assert!(client.is_ok(), "client build failed: {:?}", client.err());
+    }
+
+    #[test]
+    fn parses_issues_and_excludes_pull_request_entries() {
+        let value = serde_json::json!({
+            "number": 12,
+            "title": "Fix the thing",
+            "state": "open",
+            "body": "Details",
+            "user": { "login": "bushninja", "avatar_url": "https://example.com/a.png" },
+            "labels": [{ "name": "bug" }, { "name": "linux" }],
+            "comments": 3,
+            "created_at": "2026-11-01T00:00:00Z",
+            "updated_at": "2026-11-02T00:00:00Z",
+            "html_url": "https://github.com/o/r/issues/12"
+        });
+        let issue = issue_from_value(&value);
+        assert_eq!(issue.number, 12);
+        assert_eq!(issue.labels, vec!["bug", "linux"]);
+        assert_eq!(issue.author_login, "bushninja");
+        assert!(validate_issue("  title  ", "body").is_ok());
+        assert!(validate_issue("   ", "body").is_err());
+        assert!(validate_issue(&"x".repeat(257), "body").is_err());
+    }
+
+    #[test]
+    fn validates_file_paths_and_builds_write_payload() {
+        assert!(valid_file_path("src/main.rs"));
+        assert!(valid_file_path("README.md"));
+        assert!(!valid_file_path(""));
+        assert!(!valid_file_path("/etc/passwd"));
+        assert!(!valid_file_path("src/../secret"));
+        assert!(!valid_file_path("src//main.rs"));
+        assert!(!valid_file_path(".git/config"));
+
+        let body = file_write_body("hello\n", Some("abc123"), Some("main"), "Update notes");
+        assert_eq!(body["message"], "Update notes");
+        assert_eq!(body["sha"], "abc123");
+        assert_eq!(body["branch"], "main");
+        let decoded = decode_base64(body["content"].as_str().expect("content"))
+            .expect("base64");
+        assert_eq!(String::from_utf8(decoded).expect("utf8"), "hello\n");
+        assert_eq!(file_commit_message("  ", "README.md"), "Update README.md");
     }
 
     #[test]

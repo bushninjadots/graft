@@ -4,21 +4,24 @@
   import DOMPurify from "dompurify";
   import {
     api,
+    type GithubRepo,
     type GithubRepoDetail,
     type RepoBranch,
     type RepoCommit,
     type RepoCommitDetail,
     type RepoEntry,
     type RepoFile,
+    type RepoIssue,
     type RepoPull,
     type RepoPullDetail,
   } from "../lib/api";
   import { closeRepo, github } from "../lib/state/github.svelte";
-  import { notify } from "../lib/state/ui.svelte";
+  import { notify, ui } from "../lib/state/ui.svelte";
+  import { pushNotification, type NotificationTarget } from "../lib/state/notifications.svelte";
   import { plural, relativeTime } from "../lib/format";
   import Icon from "../lib/components/Icon.svelte";
 
-  type Tab = "overview" | "code" | "commits" | "pulls" | "branches";
+  type Tab = "overview" | "code" | "commits" | "pulls" | "issues" | "branches";
 
   const repo = $derived(github.selected);
   const owner = $derived(repo?.owner?.login ?? repo?.fullName.split("/")[0] ?? "");
@@ -36,6 +39,13 @@
   let codeError = $state<string | null>(null);
   let file = $state<RepoFile | null>(null);
   let fileLoading = $state(false);
+  let editing = $state(false);
+  let editContent = $state("");
+  let editMessage = $state("");
+  let editConfirm = $state(false);
+  let editSaving = $state(false);
+  let editError = $state<string | null>(null);
+  const canEdit = $derived(!!detail?.permissions?.push);
 
   let branches = $state<RepoBranch[]>([]);
   let branch = $state<string | null>(null);
@@ -51,6 +61,16 @@
   let pullsLoading = $state(false);
   let pullDetail = $state<RepoPullDetail | null>(null);
   let pullLoading = $state(false);
+
+  let issues = $state<RepoIssue[]>([]);
+  let issuesLoading = $state(false);
+  let issueState = $state<"open" | "closed" | "all">("open");
+  let newIssueOpen = $state(false);
+  let issueTitle = $state("");
+  let issueBody = $state("");
+  let issueConfirm = $state(false);
+  let issueSaving = $state(false);
+  let issueError = $state<string | null>(null);
 
   let starBusy = $state(false);
   let forkBusy = $state(false);
@@ -97,7 +117,16 @@
       readme = readmeFile;
       branch = info.defaultBranch;
       clonePath = await api.cloneDestination(owner, name).catch(() => "");
-      await Promise.all([loadDir([]), loadBranches(), loadCommits(true), loadPulls()]);
+      await Promise.all([loadDir([]), loadBranches(), loadCommits(true), loadPulls(), loadIssues()]);
+      const focus = ui.repositoryFocus;
+      ui.repositoryFocus = null;
+      if (focus) {
+        tab = focus.tab as Tab;
+        if (focus.path) {
+          await openFile(focus.path);
+          tab = "code";
+        }
+      }
     } catch (cause) {
       error = message(cause);
     } finally {
@@ -140,7 +169,12 @@
     try {
       const starred = await api.setStar(owner, name, !detail.starred);
       detail = { ...detail, starred };
-      notify(starred ? "Starred" : "Star removed", "ok");
+      pushNotification({
+        title: starred ? "Repository starred" : "Star removed",
+        detail: `${owner}/${name}`,
+        tone: "ok",
+        target: repoTarget("overview"),
+      });
     } catch (cause) {
       notify(message(cause), "danger");
     } finally {
@@ -152,7 +186,12 @@
     forkBusy = true;
     try {
       forked = await api.forkRepo(owner, name);
-      notify(`Fork created: ${forked.fullName}`, "ok");
+      pushNotification({
+        title: "Repository forked",
+        detail: `${owner}/${name} → ${forked.fullName}`,
+        tone: "ok",
+        target: repoTarget("overview"),
+      });
     } catch (cause) {
       notify(message(cause), "danger");
     } finally {
@@ -209,12 +248,65 @@
   async function openFile(path: string): Promise<void> {
     fileLoading = true;
     codeError = null;
+    cancelEdit();
     try {
       file = await api.repoFile(owner, name, path, branch);
     } catch (cause) {
       codeError = message(cause);
     } finally {
       fileLoading = false;
+    }
+  }
+
+  function startEdit(): void {
+    if (!file || file.content === null) return;
+    editContent = file.content;
+    editMessage = `Update ${file.name}`;
+    editConfirm = false;
+    editError = null;
+    editing = true;
+  }
+
+  function cancelEdit(): void {
+    editing = false;
+    editConfirm = false;
+    editError = null;
+    editContent = "";
+  }
+
+  async function commitEdit(): Promise<void> {
+    if (!file || editSaving) return;
+    editSaving = true;
+    editError = null;
+    try {
+      const result = await api.repoSaveFile(
+        owner,
+        name,
+        file.path,
+        editContent,
+        file.sha,
+        branch,
+        editMessage,
+      );
+      file = {
+        ...file,
+        content: editContent,
+        sha: result.sha,
+        size: new TextEncoder().encode(editContent).length,
+      };
+      editing = false;
+      editConfirm = false;
+      pushNotification({
+        title: "File edited on GitHub",
+        detail: `${owner}/${name}/${result.path} · ${branch}`,
+        tone: "ok",
+        target: repoTarget("code", file.path),
+      });
+      void loadCommits(true);
+    } catch (cause) {
+      editError = message(cause);
+    } finally {
+      editSaving = false;
     }
   }
 
@@ -258,6 +350,60 @@
     } finally {
       commitLoading = false;
     }
+  }
+
+  async function loadIssues(): Promise<void> {
+    issuesLoading = true;
+    try {
+      issues = await api.repoIssues(owner, name, issueState);
+    } catch (cause) {
+      notify(message(cause), "danger");
+    } finally {
+      issuesLoading = false;
+    }
+  }
+
+  function setIssueState(next: "open" | "closed" | "all"): void {
+    issueState = next;
+    void loadIssues();
+  }
+
+  function resetIssueForm(): void {
+    newIssueOpen = false;
+    issueTitle = "";
+    issueBody = "";
+    issueConfirm = false;
+    issueError = null;
+  }
+
+  async function createIssue(): Promise<void> {
+    if (issueSaving) return;
+    issueSaving = true;
+    issueError = null;
+    try {
+      const created = await api.createIssue(owner, name, issueTitle, issueBody);
+      resetIssueForm();
+      await loadIssues();
+      pushNotification({
+        title: `Issue #${created.number} created`,
+        detail: `${created.title} · ${owner}/${name}`,
+        tone: "ok",
+        target: repoTarget("issues"),
+      });
+    } catch (cause) {
+      issueError = message(cause);
+    } finally {
+      issueSaving = false;
+    }
+  }
+
+  function repoTarget(tabName: string, path?: string): NotificationTarget {
+    return {
+      view: "repository",
+      repo: repo ? ($state.snapshot(repo) as GithubRepo) : null,
+      tab: tabName,
+      path,
+    };
   }
 
   async function loadPulls(): Promise<void> {
@@ -388,7 +534,7 @@
       {/if}
 
       <div class="tabs" role="tablist">
-        {#each [["overview", "Overview"], ["code", "Code"], ["commits", "Commits"], ["pulls", "Pull requests"], ["branches", "Branches"]] as [id, label]}
+        {#each [["overview", "Overview"], ["code", "Code"], ["commits", "Commits"], ["pulls", "Pull requests"], ["issues", "Issues"], ["branches", "Branches"]] as [id, label]}
           <button
             class="tab"
             class:active={tab === id}
@@ -398,6 +544,7 @@
           >
             {label}
             {#if id === "pulls" && pulls.length}<span class="count">{pulls.length}</span>{/if}
+            {#if id === "issues" && issues.length}<span class="count">{issues.length}</span>{/if}
             {#if id === "branches" && branches.length}<span class="count">{branches.length}</span>{/if}
           </button>
         {/each}
@@ -429,7 +576,7 @@
             </div>
             <div class="branch-pick">
               <Icon name="git-branch" size={11} />
-              <select class="field mono" bind:value={branch} onchange={() => { file = null; void loadDir(dirPath); }}>
+              <select class="field mono" bind:value={branch} onchange={() => { file = null; cancelEdit(); void loadDir(dirPath); }}>
                 {#each branches as item (item.name)}
                   <option value={item.name}>{item.name}</option>
                 {/each}
@@ -439,11 +586,72 @@
 
           {#if file}
             <div class="file-head">
-              <button class="link" onclick={() => (file = null)}>← back to {dirPath.join("/") || name}</button>
-              <span class="mono faint">{size(file.size)} · {file.path}</span>
+              <button class="link" onclick={() => { file = null; cancelEdit(); }}>← back to {dirPath.join("/") || name}</button>
+              <div class="file-actions">
+                <span class="mono faint">{size(file.size)} · {file.path}</span>
+                {#if file.content !== null && !file.binary && !file.truncated}
+                  {#if canEdit}
+                    {#if editing}
+                      <span class="badge warn">editing</span>
+                    {:else}
+                      <button class="btn ghost" onclick={startEdit}>Edit</button>
+                    {/if}
+                  {:else}
+                    <span class="mono faint" title="Your GitHub account does not report push access to this repository">read-only</span>
+                  {/if}
+                {/if}
+              </div>
             </div>
             {#if file.content !== null}
-              <pre class="code">{file.content}</pre>
+              {#if editing}
+                <div class="edit-wrap">
+                  <textarea
+                    class="edit-area mono"
+                    bind:value={editContent}
+                    spellcheck="false"
+                    aria-label={`Edit ${file.path}`}
+                  ></textarea>
+                  <div class="edit-bar">
+                    <span class="mono faint">
+                      {editContent.split("\n").length} lines · {editContent.length} chars · {branch}
+                    </span>
+                    <div class="edit-actions">
+                      <button class="btn ghost" onclick={cancelEdit} disabled={editSaving}>Cancel</button>
+                      <button class="btn primary" onclick={() => (editConfirm = true)} disabled={editSaving || editContent === file.content}>
+                        Review commit
+                      </button>
+                    </div>
+                  </div>
+                  {#if editConfirm}
+                    <div class="commit-confirm">
+                      <div class="commit-head">
+                        <span class="mono-label">commit to github</span>
+                        <span class="badge warn">external write · {branch}</span>
+                      </div>
+                      <p class="commit-copy">
+                        This commits <span class="mono">{file.path}</span> directly to
+                        <span class="mono">{owner}/{name}</span> on <span class="mono">{branch}</span>.
+                        It bypasses local Git and cannot be undone from GRAFT.
+                      </p>
+                      <label class="commit-field">
+                        <span class="mono-label">Commit message</span>
+                        <input class="field" bind:value={editMessage} maxlength="240" />
+                      </label>
+                      {#if editError}<p class="error">{editError}</p>{/if}
+                      <div class="edit-actions">
+                        <button class="btn ghost" onclick={() => (editConfirm = false)} disabled={editSaving}>Back</button>
+                        <button class="btn primary" onclick={() => void commitEdit()} disabled={editSaving}>
+                          {editSaving ? "Committing…" : "Confirm commit"}
+                        </button>
+                      </div>
+                    </div>
+                  {:else if editError}
+                    <p class="error">{editError}</p>
+                  {/if}
+                </div>
+              {:else}
+                <pre class="code">{file.content}</pre>
+              {/if}
             {:else if file.binary}
               <p class="state">Binary file — GRAFT shows text only. <button class="link" onclick={() => open(file?.htmlUrl)}>Open on GitHub ↗</button></p>
             {:else}
@@ -469,6 +677,80 @@
                 <li class="state">This directory is empty.</li>
               {/each}
             </ul>
+          {/if}
+        </div>
+      {:else if tab === "issues"}
+        <div class="panel issues-panel">
+          <div class="bar">
+            <div class="segmented">
+              {#each [["open", "Open"], ["closed", "Closed"], ["all", "All"]] as [id, label]}
+                <button class="seg" class:active={issueState === id} onclick={() => setIssueState(id as "open" | "closed" | "all")}>{label}</button>
+              {/each}
+            </div>
+            <div class="row">
+              <button class="btn ghost icon" title="Refresh issues" aria-label="Refresh issues" onclick={() => loadIssues()} disabled={issuesLoading}>
+                <span class:spin={issuesLoading}><Icon name="refresh" size={12} /></span>
+              </button>
+              <button class="btn ghost" onclick={() => (newIssueOpen = !newIssueOpen)}>
+                {newIssueOpen ? "Close form" : "New issue"}
+              </button>
+            </div>
+          </div>
+
+          {#if newIssueOpen}
+            <div class="issue-form">
+              <span class="mono-label">new issue · {owner}/{name}</span>
+              <input class="field" bind:value={issueTitle} maxlength="256" placeholder="Issue title" aria-label="Issue title" />
+              <textarea class="field issue-body-input" bind:value={issueBody} maxlength="60000" placeholder="Describe the issue (Markdown)" aria-label="Issue body"></textarea>
+              {#if issueError}<p class="error">{issueError}</p>{/if}
+              <div class="row">
+                <button class="btn ghost" onclick={resetIssueForm} disabled={issueSaving}>Cancel</button>
+                <button class="btn primary" onclick={() => (issueConfirm = true)} disabled={issueSaving || !issueTitle.trim()}>Review issue</button>
+              </div>
+              {#if issueConfirm}
+                <div class="commit-confirm">
+                  <div class="commit-head">
+                    <span class="mono-label">create on github</span>
+                    <span class="badge warn">external write</span>
+                  </div>
+                  <p class="commit-copy">This creates a public issue in <span class="mono">{owner}/{name}</span>. It cannot be removed from GRAFT.</p>
+                  <div class="edit-actions">
+                    <button class="btn ghost" onclick={() => (issueConfirm = false)} disabled={issueSaving}>Back</button>
+                    <button class="btn primary" onclick={() => void createIssue()} disabled={issueSaving}>
+                      {issueSaving ? "Creating…" : "Confirm issue"}
+                    </button>
+                  </div>
+                </div>
+              {/if}
+            </div>
+          {/if}
+
+          {#if issuesLoading && issues.length === 0}
+            <p class="state mono">reading issues…</p>
+          {:else if issues.length === 0}
+            <p class="state">No {issueState === "all" ? "" : issueState} issues.</p>
+          {:else}
+            <div class="issues">
+              {#each issues as issue (issue.number)}
+                <details class="issue">
+                  <summary>
+                    <span class="issue-state" class:closed={issue.state === "closed"}>{issue.state === "closed" ? "●" : "○"}</span>
+                    <span class="issue-title">{issue.title}</span>
+                    <span class="mono faint">#{issue.number}</span>
+                    {#each issue.labels as label}
+                      <span class="issue-label">{label}</span>
+                    {/each}
+                    <span class="mono faint issue-meta">@{issue.authorLogin} · {relativeTime(Date.parse(issue.updatedAt) / 1000)}</span>
+                  </summary>
+                  {#if issue.body}
+                    <pre class="issue-body">{issue.body}</pre>
+                  {:else}
+                    <p class="state">No description.</p>
+                  {/if}
+                  <button class="link" onclick={() => open(issue.htmlUrl)}>Open issue on GitHub ↗</button>
+                </details>
+              {/each}
+            </div>
           {/if}
         </div>
       {:else if tab === "commits"}
@@ -909,6 +1191,93 @@
     padding: 0 0 8px;
   }
 
+  .issues-panel {
+    padding: 0 0 8px;
+  }
+
+  .issues {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .issue {
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+    padding: 6px 10px;
+  }
+
+  .issue summary {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    cursor: pointer;
+    list-style: none;
+    min-width: 0;
+  }
+
+  .issue summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .issue-state {
+    color: var(--ok);
+    font-size: 10px;
+  }
+
+  .issue-state.closed {
+    color: var(--danger);
+  }
+
+  .issue-title {
+    font-size: 11px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .issue-label {
+    padding: 0 5px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 8.5px;
+    color: var(--text-faint);
+  }
+
+  .issue-meta {
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  .issue-body {
+    margin: 8px 0 4px;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1.55;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .issue-form {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .issue-body-input {
+    min-height: 90px;
+    padding: 6px 8px;
+    font-size: 10.5px;
+    line-height: 1.5;
+    resize: vertical;
+  }
+
   .code-bar {
     display: flex;
     align-items: center;
@@ -994,6 +1363,98 @@
     line-height: 1.55;
     color: var(--text-muted);
     overflow-x: auto;
+  }
+
+  .file-actions {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .file-actions .btn {
+    height: 21px;
+    padding: 0 8px;
+    font-size: 9.5px;
+  }
+
+  .edit-wrap {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .edit-area {
+    min-height: 380px;
+    max-height: 66vh;
+    border: 0;
+    border-radius: 0;
+    padding: 9px 11px;
+    background: var(--bg-elev);
+    color: var(--text);
+    font-size: 10.5px;
+    line-height: 1.6;
+    resize: vertical;
+    tab-size: 2;
+  }
+
+  .edit-area:focus {
+    outline: none;
+  }
+
+  .edit-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 9px;
+    padding: 6px 9px;
+    border-top: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+
+  .edit-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .edit-actions .btn {
+    height: 22px;
+    padding: 0 8px;
+    font-size: 10px;
+  }
+
+  .commit-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 10px 11px;
+    border-top: 1px solid var(--border);
+    border-left: 2px solid var(--warn);
+    background: color-mix(in srgb, var(--warn) 4%, transparent);
+  }
+
+  .commit-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .commit-copy {
+    font-size: 10px;
+    line-height: 1.55;
+    color: var(--text-muted);
+    max-width: 84ch;
+  }
+
+  .commit-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-width: 460px;
+  }
+
+  .commit-field .field {
+    height: 24px;
+    font-size: 10.5px;
   }
 
   .split {

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ProfileDesign } from "./profile";
 
 export type Project = {
   id: number;
@@ -81,6 +82,14 @@ export type RepoPage = {
   hasMore: boolean;
 };
 
+export type RepoPermissions = {
+  admin: boolean;
+  maintain: boolean;
+  push: boolean;
+  triage: boolean;
+  pull: boolean;
+};
+
 export type GithubRepoDetail = {
   id: number;
   name: string;
@@ -104,6 +113,7 @@ export type GithubRepoDetail = {
   updatedAt: string;
   createdAt: string | null;
   license: { name: string; spdxId: string | null } | null;
+  permissions: RepoPermissions | null;
   owner: { login: string; avatarUrl: string } | null;
   starred: boolean;
 };
@@ -222,6 +232,72 @@ export type PublishResult = {
   htmlUrl: string | null;
 };
 
+export type RepoIssue = {
+  number: number;
+  title: string;
+  state: string;
+  body: string;
+  authorLogin: string;
+  authorAvatar: string;
+  labels: string[];
+  comments: number;
+  createdAt: string;
+  updatedAt: string;
+  htmlUrl: string;
+};
+
+export type ProfileRepoResult = { fullName: string; htmlUrl: string };
+
+export type FileWriteResult = {
+  sha: string;
+  commitSha: string;
+  htmlUrl: string | null;
+  path: string;
+};
+
+/** Live data behind Profile Studio. Every field comes from the GitHub API. */
+export type ProfileSnapshot = {
+  login: string;
+  name: string | null;
+  avatarUrl: string;
+  bio: string | null;
+  company: string | null;
+  location: string | null;
+  websiteUrl: string | null;
+  twitterUsername: string | null;
+  status: { emoji: string; message: string } | null;
+  socials: { provider: string; url: string }[];
+  followers: number;
+  following: number;
+  publicRepos: number;
+  gists: number;
+  stars: number;
+  createdAt: string;
+  pinned: ProfileRepo[];
+  topRepos: ProfileRepo[];
+  contributionDays: { date: string; count: number; weekday: number }[];
+  totalContributions: number;
+  commits: number;
+  pullRequests: number;
+  issues: number;
+  reviews: number;
+  privateContributions: number;
+  organizations: { login: string; avatarUrl: string; description: string | null }[];
+  fetchedAt: number;
+};
+
+export type ProfileRepo = {
+  nameWithOwner: string;
+  name: string;
+  description: string | null;
+  stars: number;
+  forks: number;
+  url: string;
+  isFork: boolean;
+  language: string | null;
+  languageColor: string | null;
+};
+
 export type GitStatus = {
   path: string;
   isRepo: boolean;
@@ -314,4 +390,34 @@ export const api = {
     sha: string | null,
     message: string,
   ) => call<PublishResult>("github_publish_profile", { login, markdown, sha, message }),
+
+  githubProfileSnapshot: () => call<ProfileSnapshot>("github_profile_snapshot"),
+  profileRender: (design: ProfileDesign, snapshot: ProfileSnapshot) =>
+    call<string>("profile_render", { design, snapshot }),
+
+  repoIssues: (owner: string, repo: string, state: string) =>
+    call<RepoIssue[]>("github_repo_issues", { owner, repo, state }),
+  createIssue: (owner: string, repo: string, title: string, body: string) =>
+    call<RepoIssue>("github_create_issue", { owner, repo, title, body }),
+  createProfileRepo: (login: string) =>
+    call<ProfileRepoResult>("github_create_profile_repo", { login }),
+
+  repoSaveFile: (
+    owner: string,
+    repo: string,
+    path: string,
+    content: string,
+    sha: string | null,
+    branch: string | null,
+    message: string,
+  ) =>
+    call<FileWriteResult>("github_save_file", {
+      owner,
+      repo,
+      path,
+      content,
+      sha,
+      branch,
+      message,
+    }),
 };

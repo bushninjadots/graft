@@ -4,6 +4,7 @@
   import { absoluteTime, plural, relativeTime } from "../lib/format";
   import { session } from "../lib/state/session.svelte";
   import { notify } from "../lib/state/ui.svelte";
+  import { pushNotification } from "../lib/state/notifications.svelte";
   import Icon from "../lib/components/Icon.svelte";
 
   let projects = $state<Project[]>([]);
@@ -140,10 +141,19 @@
         .split("\n")
         .map((line) => line.trim())
         .find(Boolean);
-      notify(
-        `${action} · ${project.name}${detail ? ` — ${detail}` : ""}`,
-        result.ok ? "ok" : "danger",
-      );
+      if (result.ok) {
+        pushNotification({
+          title: `Git ${action} · ${project.name}`,
+          detail: detail ?? project.path,
+          tone: "ok",
+          target: { view: "projects" },
+        });
+      } else {
+        notify(
+          `${action} · ${project.name}${detail ? ` — ${detail}` : ""}`,
+          "danger",
+        );
+      }
       await refreshGit();
     } finally {
       gitBusy = { ...gitBusy, [project.id]: null };
@@ -222,7 +232,12 @@
       );
       if (result.ok) {
         commitDraft = { ...commitDraft, [project.id]: "" };
-        notify(`Committed in ${project.name}`, "ok");
+        pushNotification({
+          title: `Committed · ${project.name}`,
+          detail: message.split("\n")[0],
+          tone: "ok",
+          target: { view: "projects" },
+        });
         await refreshGit();
         void loadBranchesFor(project);
       } else {
@@ -254,7 +269,12 @@
       );
       if (result.ok) {
         newBranch = { ...newBranch, [project.id]: "" };
-        notify(`Branch ${name} created`, "ok");
+        pushNotification({
+          title: `Branch created · ${name}`,
+          detail: project.name,
+          tone: "ok",
+          target: { view: "projects" },
+        });
         await refreshGit();
         void loadBranchesFor(project);
       } else {
@@ -279,7 +299,12 @@
     try {
       const result = remember(project, await api.gitSwitchBranch(project.path, name));
       if (result.ok) {
-        notify(`Switched ${project.name} to ${name}`, "ok");
+        pushNotification({
+          title: `Checked out · ${name}`,
+          detail: project.name,
+          tone: "ok",
+          target: { view: "projects" },
+        });
         await refreshGit();
         void loadBranchesFor(project);
       } else {

@@ -35,6 +35,7 @@ import GripVertical from "lucide-svelte/icons/grip-vertical";
 import SlidersHorizontal from "lucide-svelte/icons/sliders-horizontal";
 import ArrowUpRight from "lucide-svelte/icons/arrow-up-right";
 import Circle from "lucide-svelte/icons/circle";
+import Bell from "lucide-svelte/icons/bell";
 import GitHubMark from "./components/GitHubMark.svelte";
 
 /** Lucide components share one generated type; reuse it instead of re-declaring props. */
@@ -72,6 +73,7 @@ export const icons: Record<string, Glyph> = {
   sliders: SlidersHorizontal,
   "arrow-up-right": ArrowUpRight,
   dot: Circle,
+  bell: Bell,
   circle: Circle,
   github: GitHubMark as unknown as Glyph,
 };

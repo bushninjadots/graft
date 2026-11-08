@@ -112,9 +112,21 @@
   {/if}
 
   {#if ui.toast}
-    <div class="toast" class:danger={ui.toast.tone === "danger"} class:ok={ui.toast.tone === "ok"} role="status">
-      {ui.toast.text}
-    </div>
+    {@const toast = ui.toast}
+    {#if toast.action}
+      <button
+        class="toast clickable"
+        class:danger={toast.tone === "danger"}
+        class:ok={toast.tone === "ok"}
+        onclick={toast.action}
+      >
+        {toast.text}
+      </button>
+    {:else}
+      <div class="toast" class:danger={toast.tone === "danger"} class:ok={toast.tone === "ok"} role="status">
+        {toast.text}
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -158,6 +170,8 @@
 
   .toast {
     position: fixed;
+    font: inherit;
+    text-align: left;
     right: 14px;
     bottom: calc(var(--statusbar-h) + 12px);
     z-index: 40;
@@ -178,5 +192,13 @@
 
   .toast.danger {
     border-left-color: var(--danger);
+  }
+
+  .toast.clickable {
+    cursor: pointer;
+  }
+
+  .toast.clickable:hover {
+    border-color: var(--border-strong);
   }
 </style>

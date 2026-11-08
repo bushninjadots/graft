@@ -9,12 +9,16 @@ window.
 
 > Status: **Phase 1–3**. Real OAuth device-flow sign-in with the token kept in the
 > system keyring, a live repository list, an in-app repository workspace (README, code,
-> commits with diffs, pull requests, branches), star/fork/clone, and Git actions for
-> local projects — fetch, pull, push, commit and branch create/switch. Profile Studio
-> authors the GitHub profile README as a local draft with a live diff and explicit
-> publish. Terminal, review actions, Watchtower, Explore/Collections, Extract Studio,
-> AI and plugins remain scheduled phases and render explicit planned modules — never
-> fake data. See [`docs/PLAN.md`](docs/PLAN.md).
+> commits with diffs, pull requests, issues, branches), star/fork/clone, editing text
+> files in repositories where you have push access, and Git actions for local
+> projects — fetch, pull, push, commit and branch create/switch. Profile Studio is a
+> visual profile builder: presets and layouts, profile picture, pinned repositories,
+> stats, contribution activity map, achievements, organisations and live README
+> preview, stored as a local draft with explicit publish. A notification centre keeps
+> pushes, pulls, checkouts, edits, forks and issues until you open them. Terminal,
+> review actions, Watchtower, Explore/Collections, Extract Studio, AI and plugins
+> remain scheduled phases and render explicit planned modules — never fake data. See
+> [`docs/PLAN.md`](docs/PLAN.md).
 
 ![GRAFT repository workspace](docs/screenshots/repository.png)
 
@@ -27,14 +31,26 @@ window.
   filter, pagination, language, stars, visibility and archived state. Links open in
   your browser; GRAFT never embeds a GitHub webpage.
 - **Repository workspace**: README, directory tree, file text, branches, commit
-  history with diffs, and pull requests with their descriptions and file diffs —
-  read inside GRAFT instead of a browser tab.
-- **Actions**: star/unstar, fork, and clone/download through the Git CLI, with an
-  add-to-projects step after cloning. Linked projects can fetch, pull and push, and
-  stage-all, commit and create or switch branches with a confirmation step.
-- **Profile Studio**: write the profile README with live preview, keep it as a local
-  SQLite draft, diff it line by line against the live GitHub README, and publish
-  explicitly to `<login>/<login>` with your own commit message.
+  history with diffs, pull requests with descriptions and file diffs, and issues
+  with descriptions and labels — read inside GRAFT instead of a browser tab.
+- **Editing**: text files can be edited and committed from the Code tab when the
+  GitHub API reports push access. The commit is a two-step confirmation with the
+  branch, path and message visible before anything is written.
+- **Actions**: star/unstar, fork, create issues, and clone/download through the Git
+  CLI, with an add-to-projects step after cloning. Linked projects can fetch, pull
+  and push, and stage-all, commit and create or switch branches with a confirmation
+  step.
+- **Notifications**: a persistent bell keeps pushes, pulls, checkouts, commits, file
+  edits, forks and issues. Each item stays until opened, then routes to the affected
+  view (including the exact repository file or Issues tab); the brief toast is also
+  clickable.
+- **Repository layouts**: list, card and compact views, remembered locally.
+- **Profile Studio**: a visual builder for the GitHub profile README — layouts
+  (banner, split, compact, terminal), five presets, profile picture, pins, stats,
+  contribution activity map, achievements, organisations, custom Markdown, accent
+  and badge styling. The generated README is stored as a local SQLite draft, diffed
+  against the live README and only uploaded after an explicit confirmation. GRAFT
+  can also create the `<login>/<login>` profile repository behind its own confirm.
 - Markdown is rendered and sanitized locally (marked + DOMPurify); README links
   still open in your browser.
 - **My Projects**: create and remove project records, validate directories in Rust,
@@ -114,7 +130,7 @@ before it is stored.
 
 ```
 src/                  Svelte 5 interface
-  views/              Home, Projects, Repositories, Repository, Settings, ModuleView
+  views/              Home, Projects, Repositories, Repository, ProfileStudio, Settings, ModuleView
   lib/components/     shell, palette and dashboard panels
   lib/state/          reactive state (appearance, nav, dashboard, github, session, ui)
   lib/api.ts          the only IPC surface
@@ -130,7 +146,10 @@ scripts/              icon rendering
 - Secrets: GitHub tokens live in the system keyring (`dev.graft.desktop` service).
   They are never written to SQLite, logs, localStorage or the webview.
 - Network: all GitHub requests are made by Rust. The webview CSP allows no external
-  connections and images only from GitHub's avatar, raw and camo hosts.
+  connections and images only from GitHub's avatar, raw, camo and shields.io badge hosts.
+- Repository file writes are available only when the GitHub API reports push access,
+  and require a second confirmation naming the branch, path and commit message.
+  Profile repository creation is also a separate confirmed write.
 - External links: `open_external` accepts `http(s)` only.
 - Local Git access is inspection of directories you explicitly link, plus the
   fetch/pull/push actions you trigger. Cloning only writes to the destination you
