@@ -14,11 +14,13 @@ window.
 > projects — fetch, pull, push, commit and branch create/switch. Profile Studio is a
 > visual profile builder: presets and layouts, profile picture, pinned repositories,
 > stats, contribution activity map, achievements, organisations and live README
-> preview, stored as a local draft with explicit publish. A notification centre keeps
-> pushes, pulls, checkouts, edits, forks and issues until you open them. Terminal,
-> review actions, Watchtower, Explore/Collections, Extract Studio, AI and plugins
-> remain scheduled phases and render explicit planned modules — never fake data. See
-> [`docs/PLAN.md`](docs/PLAN.md).
+> preview, stored as a local draft with explicit publish, plus a live GitHub status
+> editor. Repository discovery searches public GitHub by keyword, language, topic and
+> author. A notification centre keeps local pushes, pulls, checkouts, edits, forks and
+> issues, and imports unread GitHub activity; sync refreshes active data on focus and
+> on a timer. Terminal, review actions, Watchtower, standalone Collections, Extract
+> Studio, AI and plugins remain scheduled phases and render explicit planned modules —
+> never fake data. See [`docs/PLAN.md`](docs/PLAN.md).
 
 ![GRAFT repository workspace](docs/screenshots/repository.png)
 
@@ -30,6 +32,10 @@ window.
 - **Repositories**: public and private repositories from the GitHub REST API, with
   filter, pagination, language, stars, visibility and archived state. Links open in
   your browser; GRAFT never embeds a GitHub webpage.
+- **Explore**: search public GitHub repositories from the Repositories view by
+  keyword, language, topic and author. Quick topics include Hyprland, ricing, Linux,
+  Arch, dotfiles, Wayland, NixOS and Rust; results show topics, language and stars and
+  open straight into the repository workspace.
 - **Repository workspace**: README, directory tree, file text, branches, commit
   history with diffs, pull requests with descriptions and file diffs, and issues
   with descriptions and labels — read inside GRAFT instead of a browser tab.
@@ -41,16 +47,24 @@ window.
   and push, and stage-all, commit and create or switch branches with a confirmation
   step.
 - **Notifications**: a persistent bell keeps pushes, pulls, checkouts, commits, file
-  edits, forks and issues. Each item stays until opened, then routes to the affected
-  view (including the exact repository file or Issues tab); the brief toast is also
-  clickable.
+  edits, forks and issues, and imports unread GitHub notifications from the website
+  (mentions, reviews, issues, pull requests, workflow activity). Each item stays until
+  opened, then routes to the affected repository tab; the brief toast is also
+  clickable. Opening a notification locally never marks it read on GitHub.
+- **Sync**: active GitHub data refreshes when the window gains focus, every 90 seconds
+  while signed in, and from the TopBar sync button; repository and profile views have
+  their own Refresh action. Sync is read-only — local Git work is only sent online by
+  your explicit push.
 - **Repository layouts**: list, card and compact views, remembered locally.
 - **Profile Studio**: a visual builder for the GitHub profile README — layouts
   (banner, split, compact, terminal), five presets, profile picture, pins, stats,
   contribution activity map, achievements, organisations, custom Markdown, accent
-  and badge styling. The generated README is stored as a local SQLite draft, diffed
-  against the live README and only uploaded after an explicit confirmation. GRAFT
-  can also create the `<login>/<login>` profile repository behind its own confirm.
+  and badge styling, plus a live status editor for your GitHub emoji and message.
+  The generated README is stored as a local SQLite draft, diffed against the live
+  README and only uploaded after an explicit confirmation. GRAFT can also create the
+  `<login>/<login>` profile repository behind its own confirm. Status writes need the
+  `user` scope; the studio can start the device-flow reauthorisation without leaving
+  the page.
 - Markdown is rendered and sanitized locally (marked + DOMPurify); README links
   still open in your browser.
 - **My Projects**: create and remove project records, validate directories in Rust,
@@ -122,9 +136,10 @@ design; the interface shows a clear offline state instead of pretending to work.
 3. Press **Connect GitHub**, then enter the displayed code at
    `github.com/login/device`.
 
-The device flow requests `repo` and `read:user`. A personal access token with the
-same scopes is accepted as an alternative and verified against `api.github.com`
-before it is stored.
+The device flow requests `repo`, `read:user` and `user` (status writes). A personal
+access token with the same scopes is accepted as an alternative and verified against
+`api.github.com` before it is stored. Existing tokens issued before the `user` scope
+was added can be reauthorised from Profile Studio when setting a status.
 
 ## Layout
 
@@ -132,7 +147,7 @@ before it is stored.
 src/                  Svelte 5 interface
   views/              Home, Projects, Repositories, Repository, ProfileStudio, Settings, ModuleView
   lib/components/     shell, palette and dashboard panels
-  lib/state/          reactive state (appearance, nav, dashboard, github, session, ui)
+  lib/state/          reactive state (appearance, nav, dashboard, github, notifications, sync, session, ui)
   lib/api.ts          the only IPC surface
 src-tauri/src/        Rust engine (commands, db, schema, github, git, secrets, tools)
   src-tauri/src/schema/  versioned SQL migrations
@@ -149,7 +164,8 @@ scripts/              icon rendering
   connections and images only from GitHub's avatar, raw, camo and shields.io badge hosts.
 - Repository file writes are available only when the GitHub API reports push access,
   and require a second confirmation naming the branch, path and commit message.
-  Profile repository creation is also a separate confirmed write.
+  Profile repository creation and status changes are separate confirmed writes.
+  Background sync and notification import are read-only.
 - External links: `open_external` accepts `http(s)` only.
 - Local Git access is inspection of directories you explicitly link, plus the
   fetch/pull/push actions you trigger. Cloning only writes to the destination you

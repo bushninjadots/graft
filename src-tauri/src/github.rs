@@ -15,7 +15,7 @@ const CLIENT_ID_KEY: &str = "github.clientId";
 const PROFILE_KEY: &str = "github.profile";
 const USER_AGENT: &str = "GRAFT/0.1.0 (Linux; Tauri)";
 const API_VERSION: &str = "2022-11-28";
-const SCOPE: &str = "repo read:user";
+const SCOPE: &str = "repo read:user user";
 const PER_PAGE: u32 = 100;
 const TIMEOUT: Duration = Duration::from_secs(25);
 
@@ -60,6 +60,8 @@ pub struct Repo {
     pub description: Option<String>,
     #[serde(default)]
     pub language: Option<String>,
+    #[serde(default)]
+    pub topics: Vec<String>,
     #[serde(default)]
     pub stargazers_count: u32,
     #[serde(default)]
@@ -482,6 +484,196 @@ pub async fn github_list_repos(db: State<'_, Db>, page: u32) -> Result<RepoPage,
         repos,
         has_more,
     })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoSearchPage {
+    pub page: u32,
+    pub total_count: u32,
+    pub repos: Vec<Repo>,
+    pub has_more: bool,
+}
+
+fn search_query(
+    raw: &str,
+    language: Option<&str>,
+    topic: Option<&str>,
+    author: Option<&str>,
+) -> Result<String, String> {
+    let raw = raw.trim();
+    if raw.chars().count() > 256 {
+        return Err("Search terms must stay under 256 characters.".to_string());
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    if !raw.is_empty() {
+        parts.push(raw.to_string());
+    }
+    if let Some(language) = language.map(str::trim).filter(|value| !value.is_empty()) {
+        let clean = language.replace('"', "").replace(['\n', '\r'], " ");
+        if clean.chars().count() > 48 {
+            return Err("That language filter is too long.".to_string());
+        }
+        parts.push(format!("language:\"{clean}\""));
+    }
+    if let Some(topic) = topic.map(str::trim).filter(|value| !value.is_empty()) {
+        let clean = topic.trim_start_matches('#').to_lowercase();
+        if clean.is_empty()
+            || clean.chars().count() > 48
+            || !clean
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        {
+            return Err("Topics can use letters, numbers, dashes, underscores and dots.".to_string());
+        }
+        parts.push(format!("topic:{clean}"));
+    }
+    if let Some(author) = author.map(str::trim).filter(|value| !value.is_empty()) {
+        let clean = author.trim_start_matches('@');
+        if clean.is_empty()
+            || clean.chars().count() > 39
+            || !clean
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            return Err("Author filters must be a GitHub login.".to_string());
+        }
+        parts.push(format!("user:{clean}"));
+    }
+
+    if parts.is_empty() {
+        return Err("Enter a search term, language, topic or author.".to_string());
+    }
+    Ok(parts.join(" "))
+}
+
+/// Searches public GitHub repositories. Language, topic and author become
+/// GitHub search qualifiers, so the API does the filtering rather than a
+/// client-side approximation.
+#[tauri::command]
+pub async fn github_search_repos(
+    query: String,
+    language: Option<String>,
+    topic: Option<String>,
+    author: Option<String>,
+    sort: String,
+    page: u32,
+) -> Result<RepoSearchPage, String> {
+    let token = token()?;
+    let q = search_query(
+        &query,
+        language.as_deref(),
+        topic.as_deref(),
+        author.as_deref(),
+    )?;
+    let page = page.clamp(1, 10);
+    let sort = match sort.as_str() {
+        "stars" | "forks" | "updated" => Some(sort.clone()),
+        _ => None,
+    };
+
+    let mut url = reqwest::Url::parse(&format!("{API}/search/repositories"))
+        .map_err(|e| format!("Cannot build the GitHub search URL: {e}"))?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs
+            .append_pair("q", &q)
+            .append_pair("per_page", "30")
+            .append_pair("page", &page.to_string());
+        if let Some(sort) = sort {
+            pairs.append_pair("sort", &sort).append_pair("order", "desc");
+        }
+    }
+
+    #[derive(Deserialize)]
+    struct SearchResponse {
+        #[serde(default)]
+        total_count: u32,
+        #[serde(default)]
+        items: Vec<Repo>,
+    }
+
+    let value = get_json(&token, url.as_str()).await?;
+    let result: SearchResponse = serde_json::from_value(value)
+        .map_err(|e| format!("GitHub returned an unreadable search result: {e}"))?;
+    Ok(RepoSearchPage {
+        page,
+        total_count: result.total_count,
+        has_more: page < 10 && page * 30 < result.total_count,
+        repos: result.items,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubNotification {
+    pub id: String,
+    pub reason: String,
+    pub unread: bool,
+    pub updated_at: String,
+    pub title: String,
+    pub subject_type: String,
+    pub number: Option<u64>,
+    pub repo: Option<Repo>,
+}
+
+fn notification_from_value(value: &serde_json::Value) -> Option<GithubNotification> {
+    let id = value.get("id")?.as_str()?.to_string();
+    let subject = value.get("subject")?;
+    let repo = value
+        .get("repository")
+        .and_then(|repo| serde_json::from_value::<Repo>(repo.clone()).ok())?;
+    let subject_url = subject
+        .get("url")
+        .and_then(|url| url.as_str())
+        .unwrap_or_default();
+    let number = subject_url
+        .rsplit('/')
+        .next()
+        .and_then(|value| value.parse::<u64>().ok());
+    Some(GithubNotification {
+        id,
+        reason: value
+            .get("reason")
+            .and_then(|reason| reason.as_str())
+            .unwrap_or("subscribed")
+            .to_string(),
+        unread: value.get("unread").and_then(|unread| unread.as_bool()).unwrap_or(true),
+        updated_at: value
+            .get("updated_at")
+            .and_then(|updated| updated.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        title: subject
+            .get("title")
+            .and_then(|title| title.as_str())
+            .unwrap_or("GitHub notification")
+            .to_string(),
+        subject_type: subject
+            .get("type")
+            .and_then(|kind| kind.as_str())
+            .unwrap_or("Notification")
+            .to_string(),
+        number,
+        repo: Some(repo),
+    })
+}
+
+/// Reads the account's unread GitHub notifications. GRAFT only reads them;
+/// opening one locally never marks it read on github.com.
+#[tauri::command]
+pub async fn github_notifications() -> Result<Vec<GithubNotification>, String> {
+    let token = token()?;
+    let value = get_json(
+        &token,
+        &format!("{API}/notifications?all=false&participating=false&per_page=30"),
+    )
+    .await?;
+    let list = value
+        .as_array()
+        .ok_or_else(|| "GitHub returned an unexpected notification list.".to_string())?;
+    Ok(list.iter().filter_map(notification_from_value).collect())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1809,6 +2001,52 @@ mod tests {
         assert_eq!(update["sha"], "abc123");
         assert_eq!(update["message"], "refresh");
         assert_eq!(publish_message("   "), "Update profile README");
+    }
+
+    #[test]
+    fn builds_search_queries() {
+        let query = search_query("ricing", Some("Rust"), Some("#hyprland"), Some("@bushninjadots"))
+            .expect("query");
+        assert_eq!(
+            query,
+            "ricing language:\"Rust\" topic:hyprland user:bushninjadots"
+        );
+        assert!(search_query("", None, None, None).is_err());
+        assert!(search_query("x", None, Some("bad topic"), None).is_err());
+        assert!(search_query("x", None, None, Some("not/a/login")).is_err());
+    }
+
+    #[test]
+    fn maps_github_notifications_to_repository_targets() {
+        let value = serde_json::json!({
+            "id": "123",
+            "reason": "mention",
+            "unread": true,
+            "updated_at": "2026-11-08T12:00:00Z",
+            "subject": {
+                "title": "Hyprland crash on reload",
+                "type": "Issue",
+                "url": "https://api.github.com/repos/o/r/issues/42"
+            },
+            "repository": {
+                "id": 9,
+                "name": "r",
+                "full_name": "o/r",
+                "private": false,
+                "description": "rice",
+                "language": "QML",
+                "stargazers_count": 10,
+                "forks_count": 2,
+                "updated_at": "2026-11-08T12:00:00Z",
+                "default_branch": "main",
+                "html_url": "https://github.com/o/r",
+                "owner": { "login": "o" }
+            }
+        });
+        let notification = notification_from_value(&value).expect("notification");
+        assert_eq!(notification.number, Some(42));
+        assert_eq!(notification.repo.as_ref().map(|repo| repo.full_name.as_str()), Some("o/r"));
+        assert_eq!(notification.reason, "mention");
     }
 
     #[test]

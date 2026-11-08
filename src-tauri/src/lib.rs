@@ -46,6 +46,8 @@ pub fn run() {
             github::github_save_token,
             github::github_sign_out,
             github::github_list_repos,
+            github::github_search_repos,
+            github::github_notifications,
             github::github_touch_profile,
             github::github_repo_detail,
             github::github_repo_readme,
@@ -65,6 +67,7 @@ pub fn run() {
             github::github_create_issue,
             github::github_create_profile_repo,
             profile::github_profile_snapshot,
+            profile::github_set_profile_status,
             profile::profile_render,
         ])
         .run(tauri::generate_context!())

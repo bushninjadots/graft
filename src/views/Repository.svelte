@@ -15,7 +15,7 @@
     type RepoPull,
     type RepoPullDetail,
   } from "../lib/api";
-  import { closeRepo, github } from "../lib/state/github.svelte";
+  import { closeRepo, github, loadRepos } from "../lib/state/github.svelte";
   import { notify, ui } from "../lib/state/ui.svelte";
   import { pushNotification, type NotificationTarget } from "../lib/state/notifications.svelte";
   import { plural, relativeTime } from "../lib/format";
@@ -71,6 +71,9 @@
   let issueConfirm = $state(false);
   let issueSaving = $state(false);
   let issueError = $state<string | null>(null);
+
+  let refreshing = $state(false);
+  let lastRefresh = 0;
 
   let starBusy = $state(false);
   let forkBusy = $state(false);
@@ -131,11 +134,50 @@
       error = message(cause);
     } finally {
       loading = false;
+      lastRefresh = Date.now();
+    }
+  }
+
+  async function refreshRepository(silent = false): Promise<void> {
+    if (!repo || refreshing || loading || editing) return;
+    refreshing = true;
+    try {
+      const [info, readmeFile] = await Promise.all([
+        api.repoDetail(owner, name),
+        api.repoReadme(owner, name).catch(() => null),
+      ]);
+      detail = info;
+      readme = readmeFile;
+      await loadBranches();
+      if (tab === "code") {
+        const openPath = file?.path ?? null;
+        await loadDir(dirPath);
+        if (openPath) await openFile(openPath);
+      } else if (tab === "commits") {
+        await loadCommits(true);
+      } else if (tab === "pulls") {
+        await loadPulls();
+      } else if (tab === "issues") {
+        await loadIssues();
+      }
+      lastRefresh = Date.now();
+      if (!silent) notify("Repository refreshed from GitHub", "ok");
+    } catch (cause) {
+      if (!silent) notify(message(cause), "danger");
+    } finally {
+      refreshing = false;
     }
   }
 
   onMount(() => {
     void load();
+    const onFocus = () => {
+      if (!loading && !editing && Date.now() - lastRefresh > 60_000) {
+        void refreshRepository(true);
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   });
 
   // README links leave GRAFT through the Rust opener rather than navigating the webview.
@@ -186,6 +228,7 @@
     forkBusy = true;
     try {
       forked = await api.forkRepo(owner, name);
+      void loadRepos(true);
       pushNotification({
         title: "Repository forked",
         detail: `${owner}/${name} → ${forked.fullName}`,
@@ -296,6 +339,7 @@
       };
       editing = false;
       editConfirm = false;
+      lastRefresh = Date.now();
       pushNotification({
         title: "File edited on GitHub",
         detail: `${owner}/${name}/${result.path} · ${branch}`,
@@ -458,6 +502,10 @@
         <p class="desc">{detail?.description ?? "No description on GitHub."}</p>
       </div>
       <div class="head-actions">
+        <button class="btn ghost" onclick={() => void refreshRepository()} disabled={refreshing || loading}>
+          <span class:spin={refreshing}><Icon name="refresh" size={12} /></span>
+          {refreshing ? "Refreshing…" : "Refresh"}
+        </button>
         <button class="btn ghost" onclick={() => open(detail?.htmlUrl ?? repo.htmlUrl)}>GitHub ↗</button>
         <button class="btn ghost" onclick={toggleStar} disabled={starBusy || !detail}>
           {detail?.starred ? "★ Starred" : "☆ Star"}

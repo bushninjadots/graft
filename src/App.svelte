@@ -18,7 +18,7 @@
   import { loadNav } from "./lib/state/nav.svelte";
   import { loadDashboard } from "./lib/state/dashboard.svelte";
   import { boot, refreshTools, session } from "./lib/state/session.svelte";
-  import { loadGithub } from "./lib/state/github.svelte";
+  import { syncAll } from "./lib/state/sync.svelte";
 
   const active = $derived(
     navById(ui.view === "repository" ? "repositories" : ui.view) ?? navById("home")!,
@@ -31,8 +31,27 @@
       await boot();
       await Promise.all([loadAppearance(), loadNav(), loadDashboard()]);
       await refreshTools();
-      if (session.online) void loadGithub();
+      if (session.online) void syncAll(true);
     })();
+
+    let lastFocusSync = 0;
+    const syncTimer = setInterval(() => {
+      if (session.online && document.visibilityState === "visible") void syncAll();
+    }, 90_000);
+
+    function syncOnFocus(): void {
+      if (!session.online || document.visibilityState !== "visible") return;
+      if (Date.now() - lastFocusSync < 30_000) return;
+      lastFocusSync = Date.now();
+      void syncAll();
+    }
+
+    function syncOnVisibility(): void {
+      if (document.visibilityState === "visible") syncOnFocus();
+    }
+
+    window.addEventListener("focus", syncOnFocus);
+    document.addEventListener("visibilitychange", syncOnVisibility);
 
     function onKeydown(event: KeyboardEvent): void {
       const target = event.target as HTMLElement | null;
@@ -65,7 +84,12 @@
     }
 
     window.addEventListener("keydown", onKeydown);
-    return () => window.removeEventListener("keydown", onKeydown);
+    return () => {
+      window.removeEventListener("keydown", onKeydown);
+      window.removeEventListener("focus", syncOnFocus);
+      document.removeEventListener("visibilitychange", syncOnVisibility);
+      clearInterval(syncTimer);
+    };
   });
 </script>
 

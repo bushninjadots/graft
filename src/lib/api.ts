@@ -43,6 +43,7 @@ export type GithubRepo = {
   archived: boolean;
   description: string | null;
   language: string | null;
+  topics: string[];
   stargazersCount: number;
   forksCount: number;
   updatedAt: string;
@@ -80,6 +81,24 @@ export type RepoPage = {
   page: number;
   repos: GithubRepo[];
   hasMore: boolean;
+};
+
+export type RepoSearchPage = {
+  page: number;
+  totalCount: number;
+  repos: GithubRepo[];
+  hasMore: boolean;
+};
+
+export type GithubNotification = {
+  id: string;
+  reason: string;
+  unread: boolean;
+  updatedAt: string;
+  title: string;
+  subjectType: string;
+  number: number | null;
+  repo: GithubRepo | null;
 };
 
 export type RepoPermissions = {
@@ -345,6 +364,24 @@ export const api = {
   saveGithubToken: (token: string) => call<GithubUser>("github_save_token", { token }),
   signOutGithub: () => call<boolean>("github_sign_out"),
   listRepos: (page: number) => call<RepoPage>("github_list_repos", { page }),
+  searchRepos: (
+    query: string,
+    language: string,
+    topic: string,
+    author: string,
+    sort: string,
+    page: number,
+  ) =>
+    call<RepoSearchPage>("github_search_repos", {
+      query,
+      language,
+      topic,
+      author,
+      sort,
+      page,
+    }),
+  githubNotifications: () =>
+    call<GithubNotification[]>("github_notifications"),
 
   repoDetail: (owner: string, repo: string) =>
     call<GithubRepoDetail>("github_repo_detail", { owner, repo }),
@@ -392,6 +429,8 @@ export const api = {
   ) => call<PublishResult>("github_publish_profile", { login, markdown, sha, message }),
 
   githubProfileSnapshot: () => call<ProfileSnapshot>("github_profile_snapshot"),
+  setProfileStatus: (emoji: string | null, message: string) =>
+    call<ProfileSnapshot["status"]>("github_set_profile_status", { emoji, message }),
   profileRender: (design: ProfileDesign, snapshot: ProfileSnapshot) =>
     call<string>("profile_render", { design, snapshot }),
 

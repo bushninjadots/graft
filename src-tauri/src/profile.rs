@@ -75,6 +75,14 @@ query {
 }
 "#;
 
+const STATUS_MUTATION: &str = r#"
+mutation($emoji: String, $message: String) {
+  changeUserStatus(input: {emoji: $emoji, message: $message}) {
+    status { emoji message }
+  }
+}
+"#;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileSnapshot {
@@ -570,6 +578,87 @@ pub async fn github_profile_snapshot() -> Result<ProfileSnapshot, String> {
 
     let organizations = fetch_public_orgs(&token, &viewer.login).await;
     Ok(snapshot_from_viewer(viewer, organizations))
+}
+
+/// Sets or clears the live GitHub profile status through GraphQL. Empty emoji
+/// and message clear it. This is a real external write and the UI confirms it.
+#[tauri::command]
+pub async fn github_set_profile_status(
+    emoji: Option<String>,
+    message: String,
+) -> Result<Option<ProfileStatus>, String> {
+    let token = crate::secrets::load()?
+        .ok_or_else(|| "Sign in to GitHub before changing your status.".to_string())?;
+    let emoji = emoji
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let message = message.trim();
+    if message.chars().count() > 80 {
+        return Err("GitHub status messages are limited to 80 characters.".to_string());
+    }
+    if emoji.as_ref().is_some_and(|value| value.chars().count() > 32) {
+        return Err("That status emoji is too long.".to_string());
+    }
+    if emoji.is_none() && message.is_empty() {
+        // Both fields null clears the current status.
+    }
+
+    let response = http_client()?
+        .post(GRAPHQL)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", API_VERSION)
+        .bearer_auth(&token)
+        .json(&serde_json::json!({
+            "query": STATUS_MUTATION,
+            "variables": {
+                "emoji": emoji,
+                "message": if message.is_empty() { None } else { Some(message) },
+            }
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Cannot reach api.github.com: {e}"))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Cannot read GitHub's status response: {e}"))?;
+    if !status.is_success() {
+        return Err(describe_graphql(status, &body));
+    }
+    let value: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("GitHub returned an unreadable status: {e}"))?;
+    if let Some(errors) = value.get("errors").and_then(|errors| errors.as_array()) {
+        let messages: Vec<String> = errors
+            .iter()
+            .filter_map(|error| error.get("message").and_then(|message| message.as_str()))
+            .take(3)
+            .map(str::to_string)
+            .collect();
+        if !messages.is_empty() {
+            return Err(format!(
+                "GitHub could not update your status. Setting a status needs the user scope; re-authorise or use a token with user access. {}",
+                messages.join(" · ")
+            ));
+        }
+    }
+
+    let Some(status) = value.pointer("/data/changeUserStatus/status") else {
+        return Ok(None);
+    };
+    let emoji = status.get("emoji").and_then(|value| value.as_str()).unwrap_or_default();
+    let message = status.get("message").and_then(|value| value.as_str()).unwrap_or_default();
+    if emoji.trim().is_empty() && message.trim().is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(ProfileStatus {
+            emoji: emoji.to_string(),
+            message: message.to_string(),
+        }))
+    }
 }
 
 fn snapshot_from_viewer(viewer: RawViewer, organizations: Vec<ProfileOrg>) -> ProfileSnapshot {

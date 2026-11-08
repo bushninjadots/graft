@@ -17,7 +17,7 @@
 │  commands.rs   thin command handlers, validation, errors      │
 │  db.rs         SQLite, migrations, queries                    │
 │  tools.rs      environment probing                            │
-│  github.rs     device flow, API client, repository + issues    │
+│  github.rs     auth, repos, search, issues, notifications      │
 │  profile.rs    live profile snapshot + README renderer        │
 │  git.rs        repository inspection + explicit Git writes     │
 │  secrets.rs    keyring token custody                          │
@@ -41,7 +41,7 @@ Rules that keep this maintainable:
 | ---- | ------- |
 | `src/App.svelte` | shell composition, keyboard shortcuts, boot sequence |
 | `src/views/` | Home, Projects, Repositories, Repository, ProfileStudio, Settings, ModuleView |
-| `src/lib/state/` | `appearance`, `nav`, `dashboard`, `github`, `session`, `ui` |
+| `src/lib/state/` | `appearance`, `nav`, `dashboard`, `github`, `notifications`, `sync`, `session`, `ui` |
 | `src-tauri/src/schema/` | numbered SQL migrations, embedded with `include_str!` |
 | `~/.local/share/dev.graft.desktop/graft.db` | local database (WAL) |
 | `~/.local/share/dev.graft.desktop/` | app data root (Tauri `app_data_dir`) |
@@ -71,7 +71,9 @@ Settings blobs currently stored:
 | `profile.design` | visual builder design JSON |
 | `profile.designSavedAt` | last design save (epoch seconds) |
 | `app.notifications` | local notification centre (max 80, unread state) |
+| `app.notifications.seen` | imported GitHub notification keys, so they are added once |
 | `repos.view` | repository layout (`list`, `cards`, `compact`) |
+| `repos.scope` | last repository source (`mine`, `explore`) |
 
 Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`.
 
@@ -95,6 +97,8 @@ Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`
 | `github_save_token` | `token` | `GithubUser` (verified against `/user` before storage) |
 | `github_sign_out` | — | `bool` (credential removed) |
 | `github_list_repos` | `page` | `RepoPage` (100 per page, next-page detection) |
+| `github_search_repos` | `query, language, topic, author, sort, page` | `RepoSearchPage` (public GitHub search) |
+| `github_notifications` | — | unread `GithubNotification[]`; read-only, never marks GitHub read |
 | `github_touch_profile` | — | `void` |
 | `github_repo_detail` | `owner, repo` | `RepoDetail` plus `starred` |
 | `github_repo_readme` | `owner, repo` | `RepoFile \| null` |
@@ -111,6 +115,7 @@ Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`
 | `github_set_star` | `owner, repo, starred` | `bool` |
 | `github_profile_readme` | `login` | `ProfileReadme` (`exists`, content, sha, htmlUrl) |
 | `github_profile_snapshot` | — | live pins, stats, contribution calendar, socials, public orgs |
+| `github_set_profile_status` | `emoji, message` | `ProfileStatus \| null` — live change, requires the `user` scope; empty values clear |
 | `profile_render` | `design, snapshot` | GitHub-flavoured Markdown (pure renderer) |
 | `github_publish_profile` | `login, markdown, sha, message` | `PublishResult` — the only profile README upload path |
 | `github_create_profile_repo` | `login` | `ProfileRepoResult` — explicit public repo creation |
@@ -151,7 +156,12 @@ command, and add the matching wrapper in `lib/api.ts`.
   payload, and commits go through a second confirmation with the branch, path and
   message. GitHub remains the final authority.
 - The notification centre is local state in SQLite settings; opening an item can only
-  navigate inside GRAFT and never performs a write.
+  navigate inside GRAFT and never performs a write. GitHub's unread notifications are
+  imported read-only and are never marked read on github.com.
+- Status changes are a separate confirmed external write. The token must have the
+  `user` scope; the Profile Studio can start a device-flow reauthorisation for it.
+- Background sync only reads. It refreshes the active GitHub surface on focus and a
+  90-second timer, and polls unread notifications; it does not push local Git commits.
 - Destructive operations (delete project, git reset, extraction) must be confirmed
   in the UI and re-validated in Rust.
 
@@ -160,9 +170,12 @@ command, and add the matching wrapper in `lib/api.ts`.
 - Lazy: no network, polling or watcher starts on boot; the engine opens SQLite only.
 - Lists are plain DOM for now; virtualise at the point a list can exceed ~200 rows.
 - `detect_tools` runs on demand and on the Environment module's refresh action.
-- GitHub calls happen only when a view needs them: status at boot (one `/user`),
-  repositories when Repositories opens, Git status per linked project on Projects,
-  and each repository tab when it is first shown. Nothing polls in the background.
+- GitHub calls stay view-scoped: account refresh and unread notifications every
+  90 seconds while signed in, repository pages only while a repository view is active
+  or on explicit Refresh, and Git status per linked project on Projects. Focus sync
+  is throttled and every loop is silent on failure.
+- Large lists remain plain DOM until they exceed roughly 200 rows; pagination keeps
+  repository and search responses bounded.
 - Typesetting and geometry come from CSS tokens; no JS layout measurement in the shell.
 
 ## Build and run

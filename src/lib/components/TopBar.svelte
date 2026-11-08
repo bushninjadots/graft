@@ -3,6 +3,8 @@
   import type { NavItem } from "../nav";
   import { openPalette } from "../state/ui.svelte";
   import { session } from "../state/session.svelte";
+  import { github } from "../state/github.svelte";
+  import { syncAll } from "../state/sync.svelte";
   import {
     clearNotifications,
     loadNotifications,
@@ -45,6 +47,18 @@
       <span class="dot" class:on={session.online}></span>
       {session.online ? "engine online" : "engine offline"}
     </span>
+
+    <button
+      class="sync"
+      onclick={() => void syncAll(true)}
+      disabled={github.syncing}
+      title={github.syncedAt
+        ? `Last synced ${relativeTime(Math.floor(github.syncedAt / 1000))} — click to sync now`
+        : "Sync GitHub now"}
+      aria-label="Sync GitHub"
+    >
+      <span class="sync-icon" class:spinning={github.syncing}><Icon name="refresh" size={13} /></span>
+    </button>
 
     <div class="bell-wrap">
       <button
@@ -165,7 +179,8 @@
     position: relative;
   }
 
-  .bell {
+  .bell,
+  .sync {
     position: relative;
     display: inline-flex;
     align-items: center;
@@ -180,9 +195,29 @@
   }
 
   .bell:hover,
-  .bell.has-unread {
+  .bell.has-unread,
+  .sync:hover:not(:disabled) {
     color: var(--text);
     border-color: var(--border-strong);
+  }
+
+  .sync:disabled {
+    cursor: wait;
+    opacity: 0.7;
+  }
+
+  .sync-icon {
+    display: inline-flex;
+  }
+
+  .spinning {
+    animation: spin 900ms linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .unread {

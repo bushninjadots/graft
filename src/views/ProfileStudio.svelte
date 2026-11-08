@@ -3,7 +3,7 @@
   import { marked } from "marked";
   import DOMPurify from "dompurify";
   import { api, type ProfileReadme, type ProfileSnapshot } from "../lib/api";
-  import { githubUser, isSignedIn } from "../lib/state/github.svelte";
+  import { github, githubUser, isSignedIn, loadGithub } from "../lib/state/github.svelte";
   import { navigate, notify } from "../lib/state/ui.svelte";
   import { relativeTime } from "../lib/format";
   import { pushNotification } from "../lib/state/notifications.svelte";
@@ -67,6 +67,24 @@
   let creatingRepo = $state(false);
   let createRepoError = $state<string | null>(null);
 
+  let statusEmoji = $state("");
+  let statusMessage = $state("");
+  let statusDirty = $state(false);
+  let statusConfirm = $state(false);
+  let statusSaving = $state(false);
+  let statusError = $state<string | null>(null);
+  let lastSnapshotFetch = 0;
+  let statusDevice = $state<{
+    code: string;
+    deviceCode: string;
+    expiresAt: number;
+    interval: number;
+  } | null>(null);
+  let statusDeviceBusy = $state(false);
+  let statusDeviceError = $state<string | null>(null);
+  let statusPollTimer: ReturnType<typeof setTimeout> | null = null;
+  let statusCancelled = true;
+
   let achievementName = $state("");
   let achievementTier = $state<AchievementBadge["tier"]>("bronze");
 
@@ -76,6 +94,13 @@
   let renderTicket = 0;
 
   const readonly = $derived(!isSignedIn());
+  const scopes = $derived(
+    (github.status?.scopes ?? "")
+      .split(",")
+      .map((scope) => scope.trim())
+      .filter(Boolean),
+  );
+  const canWriteStatus = $derived(scopes.length === 0 || scopes.includes("user"));
 
   function message(cause: unknown): string {
     return cause instanceof Error ? cause.message : String(cause);
@@ -120,6 +145,19 @@
     if (saveTimer) clearTimeout(saveTimer);
     if (designTimer) clearTimeout(designTimer);
     if (renderTimer) clearTimeout(renderTimer);
+    if (statusPollTimer) clearTimeout(statusPollTimer);
+    statusCancelled = true;
+  });
+
+  function refreshOnFocus(): void {
+    if (!isSignedIn() || statusDirty || snapshotLoading) return;
+    if (Date.now() - lastSnapshotFetch < 60_000) return;
+    void loadSnapshot();
+  }
+
+  onMount(() => {
+    window.addEventListener("focus", refreshOnFocus);
+    return () => window.removeEventListener("focus", refreshOnFocus);
   });
 
   $effect(() => {
@@ -183,11 +221,133 @@
     snapshotLoading = true;
     snapshotError = null;
     try {
-      snapshot = await api.githubProfileSnapshot();
+      const next = await api.githubProfileSnapshot();
+      snapshot = next;
+      lastSnapshotFetch = Date.now();
+      if (!statusDirty) {
+        statusEmoji = next.status?.emoji ?? "";
+        statusMessage = next.status?.message ?? "";
+      }
     } catch (cause) {
       snapshotError = message(cause);
     } finally {
       snapshotLoading = false;
+    }
+  }
+
+  function markStatusDirty(): void {
+    statusDirty = true;
+    statusConfirm = false;
+    statusError = null;
+  }
+
+  function useStatusEmoji(emoji: string): void {
+    statusEmoji = emoji;
+    markStatusDirty();
+  }
+
+  function prepareClearStatus(): void {
+    statusEmoji = "";
+    statusMessage = "";
+    statusDirty = true;
+    statusError = null;
+    statusConfirm = true;
+  }
+
+  async function startStatusDevice(): Promise<void> {
+    statusDeviceError = null;
+    statusDeviceBusy = true;
+    try {
+      const start = await api.startDeviceFlow();
+      statusDevice = {
+        code: start.userCode,
+        deviceCode: start.deviceCode,
+        expiresAt: Date.now() + start.expiresIn * 1000,
+        interval: Math.max(5, start.interval),
+      };
+      statusCancelled = false;
+      void api
+        .openExternal(start.verificationUri)
+        .catch((cause) => (statusDeviceError = message(cause)));
+      scheduleStatusPoll(statusDevice.interval);
+    } catch (cause) {
+      statusDeviceError = message(cause);
+    } finally {
+      statusDeviceBusy = false;
+    }
+  }
+
+  function scheduleStatusPoll(seconds: number): void {
+    if (statusPollTimer) clearTimeout(statusPollTimer);
+    statusPollTimer = setTimeout(
+      () => void pollStatusDevice(),
+      Math.max(5, seconds) * 1000,
+    );
+  }
+
+  function cancelStatusDevice(): void {
+    statusCancelled = true;
+    if (statusPollTimer) clearTimeout(statusPollTimer);
+    statusDevice = null;
+    statusDeviceError = null;
+  }
+
+  async function pollStatusDevice(): Promise<void> {
+    const current = statusDevice;
+    if (!current || statusCancelled) return;
+    if (Date.now() > current.expiresAt) {
+      statusDeviceError = "The device code expired. Start again.";
+      statusDevice = null;
+      return;
+    }
+    try {
+      const result = await api.pollDeviceFlow(current.deviceCode);
+      if (result.status === "pending") {
+        scheduleStatusPoll(current.interval);
+      } else if (result.status === "slowDown") {
+        current.interval = result.interval + 5;
+        scheduleStatusPoll(current.interval);
+      } else if (result.status === "failed") {
+        statusDeviceError = result.message;
+        statusDevice = null;
+      } else {
+        statusCancelled = true;
+        statusDevice = null;
+        if (statusPollTimer) clearTimeout(statusPollTimer);
+        await loadGithub();
+        await loadSnapshot();
+        notify("Status access granted to GRAFT", "ok");
+      }
+    } catch (cause) {
+      statusDeviceError = message(cause);
+      statusDevice = null;
+    }
+  }
+
+  async function applyStatus(): Promise<void> {
+    if (statusSaving || !isSignedIn()) return;
+    statusSaving = true;
+    statusError = null;
+    try {
+      const next = await api.setProfileStatus(
+        statusEmoji.trim() || null,
+        statusMessage.trim(),
+      );
+      if (snapshot) snapshot = { ...snapshot, status: next };
+      statusDirty = false;
+      statusConfirm = false;
+      statusEmoji = next?.emoji ?? "";
+      statusMessage = next?.message ?? "";
+      pushNotification({
+        title: next ? "GitHub status updated" : "GitHub status cleared",
+        detail: next ? `${next.emoji} ${next.message}`.trim() : "Your profile no longer has a status",
+        tone: "ok",
+        target: { view: "profile" },
+      });
+    } catch (cause) {
+      statusError = message(cause);
+    } finally {
+      statusSaving = false;
     }
   }
 
@@ -576,6 +736,102 @@
             <button class="btn ghost" onclick={() => (design = applyPreset($state.snapshot(design) as ProfileDesign, "everything"))}>
               Reset layout
             </button>
+          </div>
+
+          <div class="control-group">
+            <div class="group-head">
+              <span class="mono-label">github status</span>
+              <span class="mono faint">
+                {#if snapshot?.status}
+                  {snapshot.status.emoji} {snapshot.status.message}
+                {:else}
+                  not set
+                {/if}
+              </span>
+            </div>
+            <div class="status-inputs">
+              <input
+                class="field status-emoji"
+                bind:value={statusEmoji}
+                oninput={markStatusDirty}
+                maxlength="16"
+                placeholder="🚀"
+                aria-label="Status emoji"
+              />
+              <input
+                class="field"
+                bind:value={statusMessage}
+                oninput={markStatusDirty}
+                maxlength="80"
+                placeholder="What are you working on?"
+                aria-label="Status message"
+              />
+            </div>
+            <div class="chips">
+              {#each ["🚀", "🌱", "🛠️", "🎧", "🌙", "☕"] as emoji}
+                <button class="chip emoji-chip" onclick={() => useStatusEmoji(emoji)} title={`Use ${emoji}`}>{emoji}</button>
+              {/each}
+            </div>
+            {#if !canWriteStatus}
+              <div class="status-scope">
+                <span class="badge warn">user scope missing</span>
+                <p>
+                  GitHub only accepts status writes from a token with the <span class="mono">user</span>
+                  scope. Your current scopes are <span class="mono">{scopes.join(", ") || "unknown"}</span>.
+                </p>
+                {#if statusDevice}
+                  <div class="status-device">
+                    <span class="mono-label">enter this code on github.com</span>
+                    <strong class="mono">{statusDevice.code}</strong>
+                    <span class="waiting mono-label">waiting for approval…</span>
+                  </div>
+                  <div class="row">
+                    <button class="btn ghost" onclick={cancelStatusDevice}>Cancel</button>
+                    <button class="btn" onclick={() => void api.openExternal("https://github.com/login/device").catch((cause) => (statusDeviceError = message(cause)))}>Open device page ↗</button>
+                  </div>
+                {:else}
+                  <button class="btn ghost" onclick={() => void startStatusDevice()} disabled={statusDeviceBusy}>
+                    {statusDeviceBusy ? "Requesting code…" : "Grant status access"}
+                  </button>
+                {/if}
+                {#if statusDeviceError}<p class="error">{statusDeviceError}</p>{/if}
+              </div>
+            {/if}
+            {#if statusConfirm}
+              <div class="status-confirm">
+                <span class="badge warn">live GitHub write</span>
+                <p>
+                  {statusEmoji || statusMessage
+                    ? `Set your status to ${statusEmoji} ${statusMessage}`.trim()
+                    : "Remove the status from your GitHub profile."}
+                </p>
+                {#if statusError}<p class="error">{statusError}</p>{/if}
+                <div class="row">
+                  <button class="btn ghost" onclick={() => (statusConfirm = false)} disabled={statusSaving}>Cancel</button>
+                  <button class="btn primary" onclick={() => void applyStatus()} disabled={statusSaving || !canWriteStatus}>
+                    {statusSaving ? "Updating…" : "Confirm status"}
+                  </button>
+                </div>
+              </div>
+            {:else}
+              <div class="row">
+                <button
+                  class="btn ghost"
+                  onclick={() => (statusConfirm = true)}
+                  disabled={statusSaving || !canWriteStatus || (!statusEmoji.trim() && !statusMessage.trim() && !snapshot?.status)}
+                >
+                  {snapshot?.status ? "Update status" : "Set status"}
+                </button>
+                {#if snapshot?.status || statusEmoji || statusMessage}
+                  <button class="btn ghost" onclick={prepareClearStatus} disabled={statusSaving}>Clear</button>
+                {/if}
+              </div>
+            {/if}
+            {#if statusError && !statusConfirm}<p class="error">{statusError}</p>{/if}
+            <p class="hint">
+              Writes the status to your live GitHub profile, and to this README when Status is enabled.
+              GitHub requires the <span class="mono">user</span> scope; re-authorise if the token predates it.
+            </p>
           </div>
 
           <div class="control-group">
@@ -1225,6 +1481,76 @@
   .check.inline {
     align-self: end;
     padding-bottom: 4px;
+  }
+
+  .status-inputs {
+    display: grid;
+    grid-template-columns: 58px minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .status-inputs .field {
+    height: 25px;
+    font-size: 10.5px;
+  }
+
+  .status-emoji {
+    text-align: center;
+    font-size: 14px;
+  }
+
+  .emoji-chip {
+    border: 1px solid var(--border);
+    background: transparent;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1;
+    padding: 2px 5px;
+    cursor: pointer;
+  }
+
+  .emoji-chip:hover {
+    border-color: var(--border-strong);
+  }
+
+  .status-confirm,
+  .status-scope {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 6px 7px;
+    border-left: 2px solid var(--warn);
+    background: color-mix(in srgb, var(--warn) 4%, transparent);
+  }
+
+  .status-confirm p,
+  .status-scope p {
+    font-size: 10px;
+    line-height: 1.45;
+    color: var(--text-muted);
+  }
+
+  .status-device {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex-wrap: wrap;
+    padding: 5px 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-elev);
+  }
+
+  .status-device strong {
+    font-size: 14px;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+  }
+
+  .waiting {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 9px;
   }
 
   .range-row {

@@ -16,8 +16,10 @@ star/fork/clone, and fetch/pull/push for linked projects. Phase 3 now includes t
 visual Profile Studio (live snapshot, presets, pins, stats, activity map,
 achievements, organisations, local draft, explicit publish), repository text-file
 editing with push-access checks, issue listing/creation, a persistent notification
-centre and three repository layouts. Phase 0 (foundation) is complete and verified
-as well.
+centre, three repository layouts, public repository search (keyword/language/topic/
+author), live profile status editing with device-flow scope upgrade, and focus/timer
+sync with unread GitHub notification import. Phase 0 (foundation) is complete and
+verified as well.
 
 Delivered in Phase 1a:
 
@@ -37,17 +39,18 @@ Delivered in Phase 1a:
 | 12 | Local project fetch / pull / push | done |
 | 13 | Commit and branch write operations | done (with confirmations) |
 
-Still planned: terminal, ETag caching, rate-limit surfacing beyond error messages
-and releases.
+Still planned: terminal, ETag caching, rate-limit surfacing beyond error messages,
+releases, and a standalone Explore/Collections surface. Repository discovery already
+ships inside Repositories.
 
 ### Verification (Phase 1a)
 
 | Check | Result |
 | ----- | ------ |
 | `svelte-check` | 0 errors, 0 warnings |
-| `vite build` | passes — 312 kB JS / 64 kB CSS (builder, notifications and issues included) |
+| `vite build` | passes — 330 kB JS / 67 kB CSS (builder, search, sync, notifications and issues included) |
 | `cargo check` | passes |
-| `cargo test` | 21/21 pass (migrations, settings, projects, Git parsing, branch validation, a real commit/branch cycle in a temp repo, device flow, HTTP client, profile publish/write payloads, profile snapshot shape and every README section, issues, file-path validation) |
+| `cargo test` | 23/23 pass (migrations, settings, projects, Git parsing, branch validation, a real commit/branch cycle in a temp repo, device flow, HTTP client, profile publish/write payloads, profile snapshot shape and every README section, issues, file-path validation, search queries, notification mapping) |
 | Repository API | verified live with a real token: repository list, detail, README and branches rendered in the running window; commits and pull requests fetched with no errors |
 | Keyring round-trip | verified against the live Secret Service on this machine |
 | Visual review | running window captured with `grim`; Repositories sign-in flow inspected |
@@ -155,19 +158,30 @@ run git operations and open a terminal — all with real data.
 
 ## Phase 2 — Watchtower
 
-Favourite repos, event polling with conditional requests, GitHub notifications,
-native notifications via `tauri-plugin-notification`, alert categories, history in
-SQLite, optional background worker behind a setting (default off).
+Unread GitHub notifications now import read-only into GRAFT's persistent local
+centre, and focus/timer sync refreshes active GitHub data. Still planned: favourite
+repositories, event polling with conditional requests, native notifications via
+`tauri-plugin-notification`, alert categories, history in SQLite, and an optional
+background worker behind a setting (default off).
 
 ---
 
 ## Phase 3 — Advanced GitHub
 
 Pull requests, reviews and inline comments, issues, branch graph, side-by-side diff,
-Explore/Collections with saved searches, Profile Studio with Markdown preview and a
-choice between an app-only draft and publishing to the GitHub profile README
-repository. Publishing is always explicit; the draft never leaves the machine
+repository search inside Repositories, a standalone Explore/Collections surface with
+saved searches, Profile Studio with Markdown preview and a choice between an app-only
+draft and publishing to the GitHub profile README repository. Publishing is always
+explicit; the draft never leaves the machine
 unless the user chooses to sync it.
+
+**Explore and statuses shipped.** Repository discovery lives in Repositories →
+Explore: keyword search plus language, topic and author qualifiers, sorting and quick
+topic chips, all through GitHub's search API. Profile Studio now also sets or clears
+the live GitHub status through a confirmed GraphQL mutation; because GitHub requires
+the `user` scope, the studio can start a device-flow reauthorisation and refresh the
+snapshot. App focus, a 90-second timer and the TopBar button refresh active GitHub
+data, while unread notifications are imported without marking them read online.
 
 **Profile Studio shipped as a builder.** The view fetches a live snapshot
 (`github_profile_snapshot`: identity, pins, top repositories, stats, contribution

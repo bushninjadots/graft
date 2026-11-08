@@ -8,7 +8,9 @@
     loadGithub,
     loadRepos,
     openRepo,
+    searchRepos,
     setClientId,
+    setRepoScope,
     signOut,
     visibleRepos,
   } from "../lib/state/github.svelte";
@@ -18,7 +20,20 @@
   const user = $derived(githubUser());
   const signedIn = $derived(github.status?.signedIn ?? false);
   const repos = $derived(visibleRepos());
+  const repoScope = $derived(github.scope);
+  const displayRepos = $derived(repoScope === "mine" ? repos : github.discover.results);
   const savedClientId = $derived(github.status?.clientId ?? "");
+
+  const TOPICS = [
+    { id: "hyprland", label: "Hyprland" },
+    { id: "ricing", label: "Ricing" },
+    { id: "linux", label: "Linux" },
+    { id: "arch", label: "Arch" },
+    { id: "dotfiles", label: "Dotfiles" },
+    { id: "wayland", label: "Wayland" },
+    { id: "nixos", label: "NixOS" },
+    { id: "rust", label: "Rust" },
+  ];
 
   let clientIdInput = $state("");
   let clientIdTouched = $state(false);
@@ -48,6 +63,35 @@
     void api.setSetting("repos.view", next).catch(() => undefined);
   }
 
+  function submitSearch(event: SubmitEvent): void {
+    event.preventDefault();
+    void searchRepos(true);
+  }
+
+  function pickTopic(topic: string): void {
+    github.discover.topic = github.discover.topic === topic ? "" : topic;
+    void searchRepos(true);
+  }
+
+  function clearSearch(): void {
+    github.discover.query = "";
+    github.discover.language = "";
+    github.discover.topic = "";
+    github.discover.author = "";
+    github.discover.sort = "best";
+    github.discover.results = [];
+    github.discover.totalCount = 0;
+    github.discover.page = 1;
+    github.discover.hasMore = false;
+    github.discover.error = null;
+    github.discover.searched = false;
+  }
+
+  function refreshCurrent(): void {
+    if (repoScope === "mine") void loadRepos(true);
+    else void searchRepos(true);
+  }
+
   $effect(() => {
     if (!clientIdTouched) clientIdInput = savedClientId;
   });
@@ -56,6 +100,8 @@
     void (async () => {
       const stored = await api.getSetting("repos.view").catch(() => null);
       if (stored === "cards" || stored === "compact" || stored === "list") repoView = stored;
+      const storedScope = await api.getSetting("repos.scope").catch(() => null);
+      if (storedScope === "mine" || storedScope === "explore") github.scope = storedScope;
       if (!github.status) await loadGithub();
       if (github.status?.signedIn && github.repos.length === 0) await loadRepos(true);
     })();
@@ -317,8 +363,9 @@
         </form>
         <p class="hint">
           The token is verified against api.github.com and only then written to the Secret Service.
-          Use <span class="mono">repo</span> and <span class="mono">read:user</span> scopes to match
-          the device flow.
+          Use <span class="mono">repo</span>, <span class="mono">read:user</span> and
+          <span class="mono">user</span> scopes to match the device flow. The
+          <span class="mono">user</span> scope is needed to set your GitHub status.
         </p>
         {#if tokenError}<p class="error">{tokenError}</p>{/if}
       {/if}
@@ -359,17 +406,44 @@
     {/if}
 
     <div class="toolbar panel">
-      <Icon name="search" size={13} />
-      <input
-        class="search"
-        bind:value={github.filter}
-        placeholder="Filter by name, language or visibility…"
-        spellcheck="false"
-        aria-label="Filter repositories"
-      />
-      <span class="mono-label">
-        {plural(github.repos.length, "repository", "repositories")}
-      </span>
+      <div class="scope-switch" role="group" aria-label="Repository source">
+        <button class="scope-btn" class:active={repoScope === "mine"} onclick={() => setRepoScope("mine")}>Mine</button>
+        <button class="scope-btn" class:active={repoScope === "explore"} onclick={() => setRepoScope("explore")}>Explore</button>
+      </div>
+      {#if repoScope === "mine"}
+        <Icon name="search" size={13} />
+        <input
+          class="search"
+          bind:value={github.filter}
+          placeholder="Filter by name, language or visibility…"
+          spellcheck="false"
+          aria-label="Filter repositories"
+        />
+        <span class="mono-label">
+          {plural(github.repos.length, "repository", "repositories")}
+        </span>
+      {:else}
+        <form class="discover-form" onsubmit={submitSearch}>
+          <Icon name="search" size={13} />
+          <input
+            class="search"
+            bind:value={github.discover.query}
+            placeholder="Search GitHub — hyprland, ricing, linux…"
+            spellcheck="false"
+            aria-label="Search public repositories"
+          />
+          <button class="btn" type="submit" disabled={github.discover.loading}>
+            {github.discover.loading ? "Searching…" : "Search"}
+          </button>
+        </form>
+        <span class="mono-label">
+          {#if github.discover.searched}
+            {plural(github.discover.totalCount, "result")}
+          {:else}
+            public GitHub
+          {/if}
+        </span>
+      {/if}
       <div class="view-switch" role="group" aria-label="Repository layout">
         {#each [["list", "List"], ["cards", "Cards"], ["compact", "Compact"]] as [id, label]}
           <button
@@ -385,37 +459,110 @@
         class="btn ghost icon"
         title="Refresh from GitHub"
         aria-label="Refresh repositories"
-        onclick={() => loadRepos(true)}
-        disabled={github.reposLoading}
+        onclick={refreshCurrent}
+        disabled={repoScope === "mine" ? github.reposLoading : github.discover.loading}
       >
-        <span class:spin={github.reposLoading}><Icon name="refresh" size={13} /></span>
+        <span class:spin={repoScope === "mine" ? github.reposLoading : github.discover.loading}><Icon name="refresh" size={13} /></span>
       </button>
     </div>
 
-    {#if github.reposLoading && github.repos.length === 0}
-      <p class="state mono">loading repositories from api.github.com…</p>
-    {:else if github.reposError}
-      <div class="panel notice">
-        <p class="tone-danger">Repositories could not be loaded.</p>
-        <p class="faint">{github.reposError}</p>
-        <button class="btn" onclick={() => loadRepos(true)}>Retry</button>
+    {#if repoScope === "explore"}
+      <div class="panel discover">
+        <div class="discover-grid">
+          <label class="field-label">
+            <span class="mono faint">language</span>
+            <input class="field" bind:value={github.discover.language} placeholder="Rust, QML, TypeScript" list="discover-languages" />
+          </label>
+          <datalist id="discover-languages">
+            {#each ["Rust", "TypeScript", "Python", "QML", "C++", "Go", "Shell", "Lua", "Nix"] as language}
+              <option value={language}></option>
+            {/each}
+          </datalist>
+          <label class="field-label">
+            <span class="mono faint">topic</span>
+            <input class="field" bind:value={github.discover.topic} placeholder="hyprland, ricing…" spellcheck="false" />
+          </label>
+          <label class="field-label">
+            <span class="mono faint">author</span>
+            <input class="field" bind:value={github.discover.author} placeholder="login or @login" spellcheck="false" />
+          </label>
+          <label class="field-label">
+            <span class="mono faint">sort</span>
+            <select class="field" bind:value={github.discover.sort} onchange={() => github.discover.searched && void searchRepos(true)}>
+              <option value="best">Best match</option>
+              <option value="stars">Most stars</option>
+              <option value="forks">Most forks</option>
+              <option value="updated">Recently updated</option>
+            </select>
+          </label>
+        </div>
+        <div class="discover-topics">
+          <span class="mono-label">topics</span>
+          {#each TOPICS as topic}
+            <button
+              class="topic-chip"
+              class:active={github.discover.topic === topic.id}
+              onclick={() => pickTopic(topic.id)}
+            >{topic.label}</button>
+          {/each}
+        </div>
+        <div class="discover-foot">
+          <span class="hint">Live GitHub search. Filters become <span class="mono">language:</span>, <span class="mono">topic:</span> and <span class="mono">user:</span> qualifiers.</span>
+          <button class="link" onclick={clearSearch}>Reset filters</button>
+        </div>
       </div>
-    {:else if github.repos.length === 0}
-      <div class="panel empty">
-        <Icon name="folder-git" size={22} />
-        <p class="empty-title">This account has no repositories GRAFT can see</p>
-        <p class="empty-copy">
-          The listing includes repositories you own, collaborate on or reach through an organisation.
-          Re-authorise with the <span class="mono">repo</span> scope if private repositories are
-          missing.
-        </p>
-        <button class="btn" onclick={() => loadRepos(true)}>Check again</button>
-      </div>
-    {:else if repos.length === 0}
-      <p class="state mono">No repository matches “{github.filter}”.</p>
+    {/if}
+
+    {#if repoScope === "mine"}
+      {#if github.reposLoading && github.repos.length === 0}
+        <p class="state mono">loading repositories from api.github.com…</p>
+      {:else if github.reposError}
+        <div class="panel notice">
+          <p class="tone-danger">Repositories could not be loaded.</p>
+          <p class="faint">{github.reposError}</p>
+          <button class="btn" onclick={() => loadRepos(true)}>Retry</button>
+        </div>
+      {:else if github.repos.length === 0}
+        <div class="panel empty">
+          <Icon name="folder-git" size={22} />
+          <p class="empty-title">This account has no repositories GRAFT can see</p>
+          <p class="empty-copy">
+            The listing includes repositories you own, collaborate on or reach through an organisation.
+            Re-authorise with the <span class="mono">repo</span> scope if private repositories are
+            missing.
+          </p>
+          <button class="btn" onclick={() => loadRepos(true)}>Check again</button>
+        </div>
+      {:else if repos.length === 0}
+        <p class="state mono">No repository matches “{github.filter}”.</p>
+      {/if}
     {:else}
+      {#if github.discover.error}
+        <div class="panel notice">
+          <p class="tone-danger">GitHub search failed.</p>
+          <p class="faint">{github.discover.error}</p>
+          <button class="btn" onclick={() => searchRepos(true)}>Retry</button>
+        </div>
+      {:else if github.discover.loading && github.discover.results.length === 0}
+        <p class="state mono">searching public repositories on api.github.com…</p>
+      {:else if !github.discover.searched}
+        <div class="panel empty">
+          <Icon name="search" size={22} />
+          <p class="empty-title">Explore GitHub without leaving GRAFT</p>
+          <p class="empty-copy">
+            Search all public repositories by keyword, language, topic or author. Try
+            <span class="mono">hyprland</span>, <span class="mono">ricing</span> or
+            <span class="mono">linux</span>, or pick a topic above.
+          </p>
+        </div>
+      {:else if github.discover.results.length === 0}
+        <p class="state mono">No public repository matched this search.</p>
+      {/if}
+    {/if}
+
+    {#if displayRepos.length > 0}
       <ul class="repos {repoView}">
-        {#each repos as repo (repo.id)}
+        {#each displayRepos as repo (repo.id)}
           <li class="panel repo">
             <div class="repo-main">
               <div class="repo-title">
@@ -431,6 +578,9 @@
               {/if}
               <div class="repo-facts mono">
                 <span>{repo.language ?? "no language"}</span>
+                {#each (repo.topics ?? []).slice(0, 3) as topic}
+                  <span class="topic-fact">#{topic}</span>
+                {/each}
                 <span>★ {repo.stargazersCount}</span>
                 <span>Y {repo.forksCount}</span>
                 <span>{repo.defaultBranch}</span>
@@ -459,9 +609,13 @@
         {/each}
       </ul>
 
-      {#if github.hasMore}
+      {#if repoScope === "mine" && github.hasMore}
         <button class="btn load-more" onclick={() => loadRepos(false)} disabled={github.reposLoading}>
           {github.reposLoading ? "Loading…" : "Load more repositories"}
+        </button>
+      {:else if repoScope === "explore" && github.discover.hasMore}
+        <button class="btn load-more" onclick={() => searchRepos(false)} disabled={github.discover.loading}>
+          {github.discover.loading ? "Loading…" : "Load more results"}
         </button>
       {/if}
     {/if}
@@ -678,6 +832,119 @@
     color: var(--text-faint);
   }
 
+  .scope-switch {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    flex: none;
+  }
+
+  .scope-btn {
+    height: 22px;
+    padding: 0 8px;
+    border: 0;
+    border-right: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-faint);
+    font: inherit;
+    font-size: 9px;
+    cursor: pointer;
+  }
+
+  .scope-btn:last-child {
+    border-right: 0;
+  }
+
+  .scope-btn.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .discover-form {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .discover-form .btn {
+    height: 22px;
+    padding: 0 8px;
+    font-size: 9.5px;
+    flex: none;
+  }
+
+  .discover {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+  }
+
+  .discover-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .discover-grid .field {
+    height: 24px;
+    font-size: 10px;
+  }
+
+  .discover-topics {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .topic-chip {
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 9px;
+    cursor: pointer;
+  }
+
+  .topic-chip:hover,
+  .topic-chip.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  .discover-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .discover-foot .hint {
+    max-width: 80ch;
+  }
+
+  .discover .link {
+    border: 0;
+    background: transparent;
+    color: var(--text-faint);
+    font: inherit;
+    font-size: 9px;
+    cursor: pointer;
+  }
+
+  .discover .link:hover {
+    color: var(--accent);
+  }
+
   .search {
     flex: 1;
     height: 100%;
@@ -775,6 +1042,12 @@
     gap: 8px;
   }
 
+  @media (max-width: 900px) {
+    .discover-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
   @media (max-width: 700px) {
     .repos.cards {
       grid-template-columns: minmax(0, 1fr);
@@ -782,6 +1055,16 @@
 
     .view-switch {
       display: none;
+    }
+
+    .toolbar {
+      flex-wrap: wrap;
+      height: auto;
+      padding: 6px 8px;
+    }
+
+    .discover-form {
+      flex-basis: 100%;
     }
   }
 
@@ -849,6 +1132,10 @@
     color: var(--text-faint);
     overflow: hidden;
     white-space: nowrap;
+  }
+
+  .topic-fact {
+    color: color-mix(in srgb, var(--accent) 75%, var(--text-faint));
   }
 
   .notice {
