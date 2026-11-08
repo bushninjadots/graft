@@ -44,7 +44,7 @@ caching, rate-limit surfacing beyond error messages, issues and releases.
 | `vite build` | passes — 248 kB JS / 45 kB CSS (marked + DOMPurify included) |
 | `cargo check` | passes |
 | `cargo test` | 8/8 pass (migrations, settings, projects, Git parsing, device flow, HTTP client) |
-| Repository API | verified live with a real token: repository list, detail, README, branches and commit list all rendered in the running window |
+| Repository API | verified live with a real token: repository list, detail, README and branches rendered in the running window; commits and pull requests fetched with no errors |
 | Keyring round-trip | verified against the live Secret Service on this machine |
 | Visual review | running window captured with `grim`; Repositories sign-in flow inspected |
 | Live GitHub calls | verified end to end by seeding the existing `gh` token into the keyring; device flow itself still needs a client ID |
