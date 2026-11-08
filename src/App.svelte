@@ -9,6 +9,7 @@
   import Projects from "./views/Projects.svelte";
   import Repositories from "./views/Repositories.svelte";
   import Repository from "./views/Repository.svelte";
+  import ProfileStudio from "./views/ProfileStudio.svelte";
   import SettingsView from "./views/Settings.svelte";
   import ModuleView from "./views/ModuleView.svelte";
   import { navById } from "./lib/nav";
@@ -92,6 +93,8 @@
             <Repositories />
           {:else if ui.view === "repository"}
             <Repository />
+          {:else if ui.view === "profile"}
+            <ProfileStudio />
           {:else if ui.view === "settings"}
             <SettingsView />
           {:else}

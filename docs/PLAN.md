@@ -43,7 +43,7 @@ caching, rate-limit surfacing beyond error messages, issues and releases.
 | `svelte-check` | 0 errors, 0 warnings |
 | `vite build` | passes — 248 kB JS / 45 kB CSS (marked + DOMPurify included) |
 | `cargo check` | passes |
-| `cargo test` | 8/8 pass (migrations, settings, projects, Git parsing, device flow, HTTP client) |
+| `cargo test` | 11/11 pass (migrations, settings, projects, Git parsing, branch validation, a real commit/branch cycle in a temp repo, device flow, HTTP client, profile publish payload) |
 | Repository API | verified live with a real token: repository list, detail, README and branches rendered in the running window; commits and pull requests fetched with no errors |
 | Keyring round-trip | verified against the live Secret Service on this machine |
 | Visual review | running window captured with `grim`; Repositories sign-in flow inspected |
@@ -164,6 +164,13 @@ Explore/Collections with saved searches, Profile Studio with Markdown preview an
 choice between an app-only draft and publishing to the GitHub profile README
 repository. Publishing is always explicit; the draft never leaves the machine
 unless the user chooses to sync it.
+
+**Profile Studio shipped first.** The view stores its draft in the SQLite settings
+blob (`profile.draft`, `profile.draftSavedAt`), debounces autosave, renders a
+sanitized preview, and diffs the draft against the live README fetched by Rust. The
+only write is `github_publish_profile`, behind a confirmation dialog showing the
+target repository and commit message. Review actions, issues and the branch graph
+remain open in this phase.
 
 ---
 

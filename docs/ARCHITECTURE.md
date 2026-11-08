@@ -18,7 +18,7 @@
 │  db.rs         SQLite, migrations, queries                    │
 │  tools.rs      environment probing                            │
 │  github.rs     device flow, API client, repository listing    │
-│  git.rs        read-only local repository inspection          │
+│  git.rs        repository inspection + explicit Git writes     │
 │  secrets.rs    keyring token custody                          │
 │  extract/      (Phase 4) repository analysis                  │
 └───────────────────────────┬──────────────────────────────────┘
@@ -39,7 +39,7 @@ Rules that keep this maintainable:
 | Path | Purpose |
 | ---- | ------- |
 | `src/App.svelte` | shell composition, keyboard shortcuts, boot sequence |
-| `src/views/` | Home, Projects, Repositories, Repository, Settings, ModuleView |
+| `src/views/` | Home, Projects, Repositories, Repository, ProfileStudio, Settings, ModuleView |
 | `src/lib/state/` | `appearance`, `nav`, `dashboard`, `github`, `session`, `ui` |
 | `src-tauri/src/schema/` | numbered SQL migrations, embedded with `include_str!` |
 | `~/.local/share/dev.graft.desktop/graft.db` | local database (WAL) |
@@ -65,6 +65,8 @@ Settings blobs currently stored:
 | `dashboard.layout` | `{ order: string[], hidden: string[] }` |
 | `github.clientId` | public OAuth app client ID (not a secret) |
 | `github.profile` | cached `GithubUser` JSON for offline display |
+| `profile.draft` | Profile Studio Markdown, never uploaded implicitly |
+| `profile.draftSavedAt` | last local draft save (epoch seconds) |
 
 Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`.
 
@@ -100,9 +102,16 @@ Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`
 | `github_repo_pull` | `owner, repo, number` | `RepoPullDetail` with files |
 | `github_fork` | `owner, repo` | `ForkResult` |
 | `github_set_star` | `owner, repo, starred` | `bool` |
+| `github_profile_readme` | `login` | `ProfileReadme` (`exists`, content, sha, htmlUrl) |
+| `github_publish_profile` | `login, markdown, sha, message` | `PublishResult` — the only upload path |
 | `clone_destination` | `owner, repo` | suggested `~/Projects/<owner>-<repo>` path |
 | `clone_repo` | `url, dest` | path (refuses an existing destination) |
 | `git_action` | `path, action` | `GitActionResult` (`fetch`, `pull --ff-only`, `push` only) |
+| `git_branches` | `path` | `GitBranch[]` with current/upstream flags |
+| `git_stage` | `path` | `GitActionResult` (`git add -A`) |
+| `git_commit` | `path, message, stageAll` | `GitActionResult` (optionally stages first) |
+| `git_create_branch` | `path, name, switch` | `GitActionResult` |
+| `git_switch_branch` | `path, name` | `GitActionResult` |
 
 Serde maps snake_case fields to camelCase for JS. GitHub payloads deserialize from
 the API's snake_case and serialize with `rename_all(serialize = "camelCase")`. Bump this table when adding a
@@ -121,8 +130,11 @@ command, and add the matching wrapper in `lib/api.ts`.
 - GitHub tokens live in the Secret Service through `keyring`; SQLite stores only the
   public OAuth client ID and the cached profile.
 - Tokens never cross IPC: `github_status` reports presence and identity, not the token.
-- `open_external` accepts `http(s)` only; Git access is read-only inspection of
-  directories the user linked.
+- `open_external` accepts `http(s)` only. Local Git writes are limited to stage,
+  commit, branch create/switch, fetch, pull and push on directories the user linked;
+  branch names are validated before they reach `git`.
+- Profile publishing is a single explicit command behind a confirmation dialog. The
+  draft is stored locally and is never uploaded by any read path.
 - Destructive operations (delete project, git reset, extraction) must be confirmed
   in the UI and re-validated in Rust.
 

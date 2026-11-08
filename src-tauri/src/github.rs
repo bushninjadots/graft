@@ -1252,6 +1252,139 @@ pub async fn github_set_star(
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileReadme {
+    pub exists: bool,
+    pub content: Option<String>,
+    pub sha: Option<String>,
+    pub html_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishResult {
+    pub sha: String,
+    pub commit_sha: String,
+    pub html_url: Option<String>,
+}
+
+/// Reads the README of the special `<login>/<login>` profile repository.
+#[tauri::command]
+pub async fn github_profile_readme(login: String) -> Result<ProfileReadme, String> {
+    let token = token()?;
+    let (login, _) = coords(&login, &login)?;
+    let value = get_optional(
+        &token,
+        &format!("{API}/repos/{login}/{login}/contents/README.md"),
+    )
+    .await?;
+
+    Ok(match value {
+        Some(value) => {
+            let file = file_from_value(&value);
+            ProfileReadme {
+                exists: true,
+                content: file.content,
+                sha: Some(file.sha),
+                html_url: Some(file.html_url),
+            }
+        }
+        None => ProfileReadme {
+            exists: false,
+            content: None,
+            sha: None,
+            html_url: None,
+        },
+    })
+}
+
+/// The contents API body for a profile README write. Kept separate so the
+/// encoding and SHA handling can be tested without a network call.
+fn publish_body(markdown: &str, sha: Option<&str>, message: &str) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "message": message,
+        "content": BASE64.encode(markdown.as_bytes()),
+    });
+    if let Some(sha) = sha.filter(|value| !value.trim().is_empty()) {
+        body["sha"] = serde_json::Value::String(sha.trim().to_string());
+    }
+    body
+}
+
+fn publish_message(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        "Update profile README".to_string()
+    } else {
+        trim_to(trimmed, 240)
+    }
+}
+
+fn trim_to(value: &str, limit: usize) -> String {
+    value.chars().take(limit).collect()
+}
+
+/// Writes the draft to the live profile README. This is the only function that
+/// publishes profile content, and the UI confirms before calling it.
+#[tauri::command]
+pub async fn github_publish_profile(
+    login: String,
+    markdown: String,
+    sha: Option<String>,
+    message: String,
+) -> Result<PublishResult, String> {
+    let token = token()?;
+    let (login, _) = coords(&login, &login)?;
+    if markdown.trim().is_empty() {
+        return Err("The draft is empty — nothing to publish.".to_string());
+    }
+    if markdown.len() > 900_000 {
+        return Err("The profile README must stay under 900 KB.".to_string());
+    }
+
+    let url = format!("{API}/repos/{login}/{login}/contents/README.md");
+    let response = client()?
+        .put(&url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", API_VERSION)
+        .bearer_auth(&token)
+        .json(&publish_body(&markdown, sha.as_deref(), &publish_message(&message)))
+        .send()
+        .await
+        .map_err(|e| format!("Cannot reach api.github.com: {e}"))?;
+
+    if response.status().as_u16() == 404 {
+        return Err(format!(
+            "The profile repository {login}/{login} does not exist yet. Create a public repository named “{login}” on GitHub, then publish again."
+        ));
+    }
+    if !response.status().is_success() {
+        return Err(describe_error(response).await);
+    }
+
+    let value: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("GitHub returned an unreadable publish response: {e}"))?;
+    Ok(PublishResult {
+        sha: value
+            .pointer("/content/sha")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        commit_sha: value
+            .pointer("/commit/sha")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        html_url: value
+            .pointer("/content/html_url")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+    })
+}
+
 /// Updates the cached profile timestamp so Settings can show when it was verified.
 #[tauri::command]
 pub fn github_touch_profile(db: State<'_, Db>) -> Result<(), String> {
@@ -1266,6 +1399,21 @@ mod tests {
     fn builds_http_client() {
         let client = client();
         assert!(client.is_ok(), "client build failed: {:?}", client.err());
+    }
+
+    #[test]
+    fn builds_profile_publish_payload() {
+        let body = publish_body("# Hi\n", None, "Update profile README");
+        assert_eq!(body["message"], "Update profile README");
+        assert!(body.get("sha").is_none());
+        let decoded = decode_base64(body["content"].as_str().expect("content"))
+            .expect("base64");
+        assert_eq!(String::from_utf8(decoded).expect("utf8"), "# Hi\n");
+
+        let update = publish_body("# Hi\n", Some("abc123"), &publish_message("  refresh\n"));
+        assert_eq!(update["sha"], "abc123");
+        assert_eq!(update["message"], "refresh");
+        assert_eq!(publish_message("   "), "Update profile README");
     }
 
     #[test]

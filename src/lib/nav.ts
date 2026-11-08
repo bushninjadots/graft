@@ -38,8 +38,8 @@ export const NAV_ITEMS: NavItem[] = [
     summary: "Projects group repositories, branches and local directories.",
     bullets: [
       "Local project registry stored in SQLite",
-      "Directory validation on creation",
-      "Per-project theme, terminal and AI settings (Phase 1+)",
+      "Directory validation and live Git state per project",
+      "Fetch, pull, push, commit and branch create/switch",
     ],
   },
   {
@@ -86,14 +86,14 @@ export const NAV_ITEMS: NavItem[] = [
     id: "profile",
     label: "Profile Studio",
     group: "GitHub",
-    status: "planned",
+    status: "ready",
     phase: 3,
     summary: "Design your GitHub profile README visually, then publish deliberately.",
     bullets: [
-      "Section-based Markdown editor with live preview",
-      "Keep it as an app-only draft, or publish it to your GitHub profile",
-      "Diff against the live README before syncing",
-      "GitHub-compatible output only — no unsupported CSS",
+      "Markdown editor with live, sanitized preview",
+      "App-only draft stored in SQLite — never auto-published",
+      "Line diff against the live profile README before syncing",
+      "Explicit publish to <login>/<login> with your own commit message",
     ],
   },
   {

@@ -203,6 +203,25 @@ export type GitActionResult = {
   error: string | null;
 };
 
+export type GitBranch = {
+  name: string;
+  current: boolean;
+  upstream: string | null;
+};
+
+export type ProfileReadme = {
+  exists: boolean;
+  content: string | null;
+  sha: string | null;
+  htmlUrl: string | null;
+};
+
+export type PublishResult = {
+  sha: string;
+  commitSha: string;
+  htmlUrl: string | null;
+};
+
 export type GitStatus = {
   path: string;
   isRepo: boolean;
@@ -278,4 +297,21 @@ export const api = {
   cloneRepo: (url: string, dest: string) => call<string>("clone_repo", { url, dest }),
   gitAction: (path: string, action: string) =>
     call<GitActionResult>("git_action", { path, action }),
+  gitBranches: (path: string) => call<GitBranch[]>("git_branches", { path }),
+  gitStage: (path: string) => call<GitActionResult>("git_stage", { path }),
+  gitCommit: (path: string, message: string, stageAll: boolean) =>
+    call<GitActionResult>("git_commit", { path, message, stageAll }),
+  gitCreateBranch: (path: string, name: string, switchTo: boolean) =>
+    call<GitActionResult>("git_create_branch", { path, name, switch: switchTo }),
+  gitSwitchBranch: (path: string, name: string) =>
+    call<GitActionResult>("git_switch_branch", { path, name }),
+
+  githubProfileReadme: (login: string) =>
+    call<ProfileReadme>("github_profile_readme", { login }),
+  githubPublishProfile: (
+    login: string,
+    markdown: string,
+    sha: string | null,
+    message: string,
+  ) => call<PublishResult>("github_publish_profile", { login, markdown, sha, message }),
 };

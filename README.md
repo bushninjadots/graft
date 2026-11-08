@@ -7,12 +7,14 @@ review, monitoring, extraction and developer tooling in one lightweight applicat
 It is a native desktop instrument (Tauri 2 + Rust + Svelte 5), not a website in a
 window.
 
-> Status: **Phase 1 — GitHub**. Real OAuth device-flow sign-in with the token kept in
-> the system keyring, a live repository list, an in-app repository workspace (README,
-> code, commits with diffs, pull requests, branches), star/fork/clone, and Git actions
-> for local projects. Terminal, commit/branch writes, code review, Watchtower, Extract
-> Studio, AI and plugins remain scheduled phases and render explicit planned modules —
-> never fake data. See [`docs/PLAN.md`](docs/PLAN.md).
+> Status: **Phase 1–3**. Real OAuth device-flow sign-in with the token kept in the
+> system keyring, a live repository list, an in-app repository workspace (README, code,
+> commits with diffs, pull requests, branches), star/fork/clone, and Git actions for
+> local projects — fetch, pull, push, commit and branch create/switch. Profile Studio
+> authors the GitHub profile README as a local draft with a live diff and explicit
+> publish. Terminal, review actions, Watchtower, Explore/Collections, Extract Studio,
+> AI and plugins remain scheduled phases and render explicit planned modules — never
+> fake data. See [`docs/PLAN.md`](docs/PLAN.md).
 
 ![GRAFT repository workspace](docs/screenshots/repository.png)
 
@@ -28,7 +30,11 @@ window.
   history with diffs, and pull requests with their descriptions and file diffs —
   read inside GRAFT instead of a browser tab.
 - **Actions**: star/unstar, fork, and clone/download through the Git CLI, with an
-  add-to-projects step after cloning. Linked projects can fetch, pull and push.
+  add-to-projects step after cloning. Linked projects can fetch, pull and push, and
+  stage-all, commit and create or switch branches with a confirmation step.
+- **Profile Studio**: write the profile README with live preview, keep it as a local
+  SQLite draft, diff it line by line against the live GitHub README, and publish
+  explicitly to `<login>/<login>` with your own commit message.
 - Markdown is rendered and sanitized locally (marked + DOMPurify); README links
   still open in your browser.
 - **My Projects**: create and remove project records, validate directories in Rust,

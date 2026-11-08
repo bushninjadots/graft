@@ -91,6 +91,39 @@ pub fn git_action(path: String, action: String) -> crate::git::GitActionResult {
 }
 
 #[tauri::command]
+pub fn git_branches(path: String) -> Result<Vec<crate::git::GitBranch>, String> {
+    crate::git::branches(&path)
+}
+
+#[tauri::command]
+pub fn git_stage(path: String) -> crate::git::GitActionResult {
+    crate::git::stage(&path)
+}
+
+#[tauri::command]
+pub fn git_commit(
+    path: String,
+    message: String,
+    stage_all: bool,
+) -> crate::git::GitActionResult {
+    crate::git::commit(&path, &message, stage_all)
+}
+
+#[tauri::command]
+pub fn git_create_branch(
+    path: String,
+    name: String,
+    switch: bool,
+) -> crate::git::GitActionResult {
+    crate::git::create_branch(&path, &name, switch)
+}
+
+#[tauri::command]
+pub fn git_switch_branch(path: String, name: String) -> crate::git::GitActionResult {
+    crate::git::switch_branch(&path, &name)
+}
+
+#[tauri::command]
 pub fn clone_repo(url: String, dest: String) -> Result<String, String> {
     crate::git::clone(&url, &dest)
 }

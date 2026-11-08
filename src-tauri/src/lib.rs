@@ -30,6 +30,11 @@ pub fn run() {
             commands::detect_tools,
             commands::project_git_status,
             commands::git_action,
+            commands::git_branches,
+            commands::git_stage,
+            commands::git_commit,
+            commands::git_create_branch,
+            commands::git_switch_branch,
             commands::clone_repo,
             commands::clone_destination,
             commands::open_external,
@@ -52,6 +57,8 @@ pub fn run() {
             github::github_repo_pull,
             github::github_fork,
             github::github_set_star,
+            github::github_profile_readme,
+            github::github_publish_profile,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start GRAFT");

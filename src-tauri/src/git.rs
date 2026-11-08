@@ -291,6 +291,186 @@ pub fn action(path: &str, action: &str) -> GitActionResult {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranch {
+    pub name: String,
+    pub current: bool,
+    pub upstream: Option<String>,
+}
+
+/// Branch names are passed to git as a single argument, so refuse anything that
+/// could be read as an option or that git itself considers invalid.
+pub fn valid_branch_name(name: &str) -> bool {
+    let name = name.trim();
+    !name.is_empty()
+        && name.len() <= 120
+        && !name.starts_with('-')
+        && !name.ends_with('/')
+        && !name.ends_with(".lock")
+        && !name.contains("..")
+        && !name.contains("//")
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
+}
+
+/// Lists local branches with their upstream, marking the checked-out one.
+pub fn branches(path: &str) -> Result<Vec<GitBranch>, String> {
+    if !Path::new(path.trim()).is_dir() {
+        return Err(format!("Directory does not exist: {path}"));
+    }
+    let current = status(path).branch;
+    let output = git(
+        path,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)%09%(upstream:short)",
+            "refs/heads",
+        ],
+    )?;
+
+    let mut list: Vec<GitBranch> = output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let mut parts = line.splitn(2, '\t');
+            let name = parts.next().unwrap_or_default().trim().to_string();
+            let upstream = parts
+                .next()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            GitBranch {
+                current: current.as_deref() == Some(name.as_str()),
+                name,
+                upstream,
+            }
+        })
+        .collect();
+    list.sort_by(|a, b| {
+        b.current
+            .cmp(&a.current)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    Ok(list)
+}
+
+/// Stages every change in the working tree. Shown behind a confirmation in the UI.
+pub fn stage(path: &str) -> GitActionResult {
+    run_report(path, "stage", &["add", "-A"])
+}
+
+/// Commits the staged tree, optionally staging everything first.
+pub fn commit(path: &str, message: &str, stage_all: bool) -> GitActionResult {
+    let message = message.trim();
+    if message.is_empty() {
+        return failure("commit", "Write a commit message first.");
+    }
+    if message.chars().count() > 4000 {
+        return failure("commit", "Commit messages are limited to 4000 characters.");
+    }
+    if stage_all {
+        let staged = run_report(path, "stage", &["add", "-A"]);
+        if !staged.ok {
+            return GitActionResult {
+                action: "commit".to_string(),
+                ..staged
+            };
+        }
+    }
+    run_report(path, "commit", &["commit", "-m", message])
+}
+
+/// Creates a branch, optionally checking it out.
+pub fn create_branch(path: &str, name: &str, switch: bool) -> GitActionResult {
+    let name = name.trim();
+    if !valid_branch_name(name) {
+        return failure(
+            "branch",
+            "Use letters, digits and - _ . / only; no leading dash or trailing slash.",
+        );
+    }
+    if switch {
+        run_report(path, "branch", &["switch", "-c", name])
+    } else {
+        run_report(path, "branch", &["branch", name])
+    }
+}
+
+/// Checks out an existing local branch.
+pub fn switch_branch(path: &str, name: &str) -> GitActionResult {
+    let name = name.trim();
+    if !valid_branch_name(name) {
+        return failure("branch", "That branch name is not valid.");
+    }
+    run_report(path, "branch", &["switch", name])
+}
+
+fn failure(action: &str, message: &str) -> GitActionResult {
+    GitActionResult {
+        action: action.to_string(),
+        ok: false,
+        output: String::new(),
+        error: Some(message.to_string()),
+    }
+}
+
+/// Runs git for a write operation and reports stdout/stderr as one result.
+fn run_report(path: &str, action: &str, args: &[&str]) -> GitActionResult {
+    if !Path::new(path.trim()).is_dir() {
+        return failure(action, &format!("Directory does not exist: {path}"));
+    }
+
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .env("GIT_OPTIONAL_LOCKS", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_EDITOR", "true")
+        .env("LC_ALL", "C")
+        .output();
+
+    match output {
+        Ok(output) => {
+            let mut text = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.trim().is_empty() {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(&stderr);
+            }
+            let text = truncate_output(text.trim());
+            if output.status.success() {
+                GitActionResult {
+                    action: action.to_string(),
+                    ok: true,
+                    output: if text.is_empty() {
+                        "Done.".to_string()
+                    } else {
+                        text
+                    },
+                    error: None,
+                }
+            } else {
+                GitActionResult {
+                    action: action.to_string(),
+                    ok: false,
+                    output: text.clone(),
+                    error: Some(if text.is_empty() {
+                        "git exited with an error.".to_string()
+                    } else {
+                        text
+                    }),
+                }
+            }
+        }
+        Err(error) => failure(action, &format!("Cannot run git: {error}")),
+    }
+}
+
 fn truncate_output(value: &str) -> String {
     const LIMIT: usize = 6000;
     let chars: Vec<char> = value.chars().collect();
@@ -384,6 +564,71 @@ mod tests {
         let (branch, detached, _, _, _) = parse_status(sample);
         assert!(detached);
         assert_eq!(branch.as_deref(), Some("1234567"));
+    }
+
+    #[test]
+    fn commits_and_switches_branches_in_a_temp_repo() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "graft-git-test-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp repo");
+        let path = dir.to_str().expect("utf-8 path");
+
+        let run = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(path)
+                .args(args)
+                .env("LC_ALL", "C")
+                .output()
+                .expect("run git");
+            assert!(
+                output.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "graft@example.com"]);
+        run(&["config", "user.name", "GRAFT Test"]);
+        std::fs::write(dir.join("README.md"), "# Test\n").expect("write file");
+
+        let committed = commit(path, "initial commit", true);
+        assert!(committed.ok, "commit failed: {:?}", committed.error);
+
+        let initial = status(path).branch.expect("current branch");
+        let listed = branches(path).expect("list branches");
+        assert!(listed.iter().any(|branch| branch.current));
+
+        let created = create_branch(path, "feat/studio", true);
+        assert!(created.ok, "branch failed: {:?}", created.error);
+        assert_eq!(status(path).branch.as_deref(), Some("feat/studio"));
+
+        let switched = switch_branch(path, &initial);
+        assert!(switched.ok, "switch failed: {:?}", switched.error);
+        assert_eq!(status(path).branch.as_deref(), Some(initial.as_str()));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validates_branch_names() {
+        assert!(valid_branch_name("feat/profile-studio"));
+        assert!(valid_branch_name("fix/git_2.1"));
+        assert!(!valid_branch_name(""));
+        assert!(!valid_branch_name("-force"));
+        assert!(!valid_branch_name("bad name"));
+        assert!(!valid_branch_name("evil..ref"));
+        assert!(!valid_branch_name("trailing/"));
+        assert!(!valid_branch_name("locked.lock"));
+        assert!(!valid_branch_name("semi;colon"));
     }
 
     #[test]
