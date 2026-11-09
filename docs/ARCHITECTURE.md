@@ -199,7 +199,7 @@ Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`
 | `ai_chat` | `request, channel` | `AiReply`; streams `started`, `delta`, `done` or `cancelled` events |
 | `plugin_installed` | — | `PluginRecord[]`; signatures re-verified on every read |
 | `plugin_registry` | `url` | `PluginRegistry` (user-supplied index; network only) |
-| `plugin_install` | `entry, trustKey, confirmed` | `PluginRecord`; re-fetches and re-verifies the manifest and signature |
+| `plugin_install` | `registryUrl, entry, trustKey, confirmed` | `PluginRecord`; the registry origin decides whether loopback package URLs are allowed; re-fetches and re-verifies the manifest and signature |
 | `plugin_set_enabled` | `id, enabled` | `PluginRecord`; enabling re-verifies the stored signature |
 | `plugin_uninstall` | `id, confirmed` | `void` |
 | `plugin_keys` | — | `TrustedKey[]` with the plugins each key signs |
@@ -248,7 +248,8 @@ command, and add the matching wrapper in `lib/api.ts`.
   read and on enable, and a tampered row is shown as unverified and never applied.
   Theme manifests can only supply the named colour tokens, validated against a strict
   hex/rgba grammar. The registry is fetched only when the Plugins view opens or the
-  user refreshes, never on boot; redirects are not followed. Uninstall and key removal
+  user refreshes, never on boot; redirects are not followed. A remote registry cannot
+  point package URLs at loopback literals or local names. Uninstall and key removal
   require confirmation and are re-validated in Rust.
 - `open_external` accepts `http(s)` only. Local Git writes are limited to stage,
   commit, branch create/switch, fetch, pull and push on directories the user linked;
@@ -284,7 +285,8 @@ command, and add the matching wrapper in `lib/api.ts`.
 - Lazy: no network, polling or watcher starts on boot; the engine opens SQLite only.
 - Lists are plain DOM for now; virtualise at the point a list can exceed ~200 rows.
 - `detect_tools` runs on demand and on the Environment module's refresh action.
-- Plugin installs read local SQLite only. The registry index is fetched when the
+- Plugin listing reads local SQLite; installs fetch the signed manifest and
+  signature over the network. The registry index is fetched when the
   Plugins view opens or on an explicit Refresh, never during boot.
 - GitHub calls stay view-scoped: account refresh and unread notifications every
   90 seconds while signed in, repository pages only while a repository view is active

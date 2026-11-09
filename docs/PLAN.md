@@ -318,10 +318,10 @@ and has two kinds:
 A user supplies the registry URL; GRAFT does not bundle or invent a public
 registry. The index is schema 1, at most 1 MiB and 500 entries, and must use HTTPS
 except for loopback development. When the registry is remote, package URLs must be
-HTTPS and non-loopback, so a hostile index cannot make GRAFT probe local services.
-Rust checks the manifest SHA-256 before parsing, verifies the signature over the
-exact bytes, and checks the manifest id, version, kind, name and summary against
-the index. Redirects are not followed.
+HTTPS and must not use loopback or local host names, so a hostile index cannot
+point package URLs at local services. Rust checks the manifest SHA-256 before
+parsing, verifies the signature over the exact bytes, and checks the manifest id,
+version, kind, name and summary against the index. Redirects are not followed.
 
 Trust is per public-key fingerprint (SHA-256 of the raw key, trust-on-first-use).
 A new key requires an explicit checkbox and `trustKey`; every install requires the

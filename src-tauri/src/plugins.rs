@@ -451,12 +451,30 @@ pub fn is_loopback_url(url: &reqwest::Url) -> bool {
     let Some(host) = url.host_str() else {
         return false;
     };
-    let host = host.trim_start_matches('[').trim_end_matches(']');
-    host.eq_ignore_ascii_case("localhost")
-        || host
-            .parse::<std::net::IpAddr>()
-            .map(|address| address.is_loopback())
-            .unwrap_or(false)
+    let host = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim_end_matches('.');
+    if host.eq_ignore_ascii_case("localhost") || host.to_ascii_lowercase().ends_with(".localhost") {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>()
+        .map(|address| match address {
+            std::net::IpAddr::V4(address) => address.is_loopback() || address.is_unspecified(),
+            std::net::IpAddr::V6(address) => {
+                address.is_loopback()
+                    || address.is_unspecified()
+                    || address
+                        .to_ipv4_mapped()
+                        .map(|mapped| mapped.is_loopback() || mapped.is_unspecified())
+                        .unwrap_or(false)
+            }
+        })
+        .unwrap_or(false)
+}
+
+fn registry_allows_loopback_packages(value: &str) -> Result<bool, String> {
+    Ok(is_loopback_url(&validate_registry_url(value)?))
 }
 
 pub fn parse_registry(bytes: &[u8], registry_url: &str) -> Result<PluginRegistry, String> {
@@ -885,7 +903,8 @@ fn read_installed(db: &Db) -> Result<Vec<PluginRecord>, String> {
         .map_err(|error| format!("cannot read installed plugins: {error}"))?;
     let mut records = Vec::new();
     for row in rows {
-        let row = row.map_err(|error| format!("cannot decode installed plugin: {error}"))?;
+        // One corrupt row must not take down every installed plugin.
+        let Ok(row) = row else { continue };
         records.push(record_from_row(&row, trusted.contains(&row.fingerprint)));
     }
     Ok(records)
@@ -1119,6 +1138,7 @@ pub async fn plugin_registry(url: String) -> Result<PluginRegistry, String> {
 #[tauri::command]
 pub async fn plugin_install(
     db: State<'_, Db>,
+    registry_url: String,
     entry: RegistryPlugin,
     trust_key: bool,
     confirmed: bool,
@@ -1126,8 +1146,9 @@ pub async fn plugin_install(
     if !confirmed {
         return Err("Installation requires confirmation.".into());
     }
-    let manifest_url = validate_package_url(&entry.manifest_url, true)?;
-    let signature_url = validate_package_url(&entry.signature_url, true)?;
+    let allow_loopback = registry_allows_loopback_packages(&registry_url)?;
+    let manifest_url = validate_package_url(&entry.manifest_url, allow_loopback)?;
+    let signature_url = validate_package_url(&entry.signature_url, allow_loopback)?;
     let client = http_client()?;
     let manifest = fetch_limited(&client, &manifest_url, MANIFEST_MAX_BYTES).await?;
     let signature = fetch_limited(&client, &signature_url, SIGNATURE_MAX_BYTES).await?;
@@ -1406,6 +1427,42 @@ mod tests {
     }
 
     #[test]
+    fn loopback_detection_covers_local_and_mapped_hosts() {
+        for value in [
+            "http://localhost/",
+            "http://localhost./",
+            "http://api.localhost/",
+            "http://127.0.0.1/",
+            "http://127.9.9.9/",
+            "http://[::1]/",
+            "http://[::ffff:127.0.0.1]/",
+            "http://0.0.0.0/",
+            "http://[::]/",
+        ] {
+            let url = reqwest::Url::parse(value).expect("loopback url");
+            assert!(is_loopback_url(&url), "{value} should be loopback");
+        }
+        for value in [
+            "https://example.dev/",
+            "https://192.168.0.1/",
+            "https://[2001:db8::1]/",
+        ] {
+            let url = reqwest::Url::parse(value).expect("remote url");
+            assert!(!is_loopback_url(&url), "{value} should be remote");
+        }
+    }
+
+    #[test]
+    fn install_package_urls_follow_the_registry_origin() {
+        assert!(!registry_allows_loopback_packages("https://example.dev/index.json").unwrap());
+        assert!(registry_allows_loopback_packages("http://127.0.0.1:8080/index.json").unwrap());
+        assert!(registry_allows_loopback_packages("http://localhost:8080/index.json").unwrap());
+        assert!(registry_allows_loopback_packages("not a url").is_err());
+        assert!(validate_package_url("http://127.0.0.1:8000/p.json", false).is_err());
+        assert!(validate_package_url("http://127.0.0.1:8000/p.json", true).is_ok());
+    }
+
+    #[test]
     fn remote_registries_cannot_point_packages_at_loopback() {
         let remote =
             serde_json::to_vec(&registry_value("http://127.0.0.1:8000/plugin.json")).unwrap();
@@ -1486,7 +1543,16 @@ mod tests {
     }
 
     fn signed_theme(version: &str, key: &SigningKey) -> (Vec<u8>, String, String) {
+        signed_theme_with_id("dev.example.night-owl", version, key)
+    }
+
+    fn signed_theme_with_id(
+        id: &str,
+        version: &str,
+        key: &SigningKey,
+    ) -> (Vec<u8>, String, String) {
         let mut value = theme_value();
+        value["id"] = json!(id);
         value["version"] = json!(version);
         let manifest = bytes(&value);
         let signature = STANDARD.encode(key.sign(&manifest).to_bytes());
@@ -1621,6 +1687,48 @@ mod tests {
         uninstall_plugin(&db, &record.id, true).expect("uninstall");
         assert!(remove_trusted_key(&db, &record.fingerprint, false).is_err());
         remove_trusted_key(&db, &record.fingerprint, true).expect("remove key");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn malformed_rows_do_not_break_the_installed_list() {
+        let (path, db) = temp_db("malformed");
+        let key = SigningKey::from_bytes(&[7u8; 32]);
+        let (first, first_signature, first_key) =
+            signed_theme_with_id("dev.example.alpha", "1.0.0", &key);
+        let (second, second_signature, second_key) =
+            signed_theme_with_id("dev.example.beta", "1.0.0", &key);
+
+        install_verified(
+            &db,
+            &entry_for(&first, &first_key),
+            &first,
+            &first_signature,
+            true,
+            true,
+        )
+        .expect("first install");
+        install_verified(
+            &db,
+            &entry_for(&second, &second_key),
+            &second,
+            &second_signature,
+            false,
+            true,
+        )
+        .expect("second install");
+
+        conn(&db)
+            .execute(
+                "UPDATE plugins SET enabled = 'broken' WHERE id = 'dev.example.alpha'",
+                [],
+            )
+            .expect("corrupt a row");
+
+        let listed = read_installed(&db).expect("a corrupt row must not fail the list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "dev.example.beta");
 
         cleanup(&path);
     }

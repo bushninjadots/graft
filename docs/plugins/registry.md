@@ -108,8 +108,8 @@ Integration payload:
   `ollama`, `docker`, `podman`, `gh`, `rust-analyzer`, `claude`, `opencode`,
   `git`, `node`, `python3`. Unknown ids are rejected.
 - `notes`: 1–2000 characters of plain text.
-- `docsUrl`: optional absolute HTTPS URL. GRAFT shows it as selectable text and
-  does not open it.
+- `docsUrl`: optional absolute HTTPS URL. GRAFT shows it as a link the user may
+  open explicitly; it is never opened automatically.
 
 ## Registry index schema 1
 
@@ -144,8 +144,9 @@ Rules:
 - Entries must have unique `id` values; duplicate ids reject the whole index.
 - Registry URL and package URLs must be absolute with a host, no credentials and
   no fragments. When the registry itself is remote, `manifestUrl` and
-  `signatureUrl` must be HTTPS and non-loopback; a loopback registry may point
-  at HTTPS or loopback HTTP.
+  `signatureUrl` must be HTTPS and must not use a loopback or local host name
+  (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`, IPv4-mapped or unspecified
+  addresses); a loopback registry may point at HTTPS or loopback HTTP.
 - `manifestSha256` is the lowercase hex SHA-256 of the exact manifest bytes,
   checked **before** the manifest is parsed.
 - `publicKey` is standard base64 of exactly 32 raw Ed25519 public-key bytes.

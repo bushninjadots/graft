@@ -1076,10 +1076,17 @@ export const api = {
   pluginRegistry: (url: string) =>
     call<PluginRegistry>("plugin_registry", { url }),
   pluginInstall: (
+    registryUrl: string,
     entry: RegistryPlugin,
     trustKey: boolean,
     confirmed: boolean,
-  ) => call<PluginRecord>("plugin_install", { entry, trustKey, confirmed }),
+  ) =>
+    call<PluginRecord>("plugin_install", {
+      registryUrl,
+      entry,
+      trustKey,
+      confirmed,
+    }),
   pluginSetEnabled: (id: string, enabled: boolean) =>
     call<PluginRecord>("plugin_set_enabled", { id, enabled }),
   pluginUninstall: (id: string, confirmed: boolean) =>

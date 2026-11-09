@@ -1,6 +1,7 @@
 import { api } from "../api";
 import { DEFAULT_THEME_ID, type Theme } from "../themes";
 import { allThemes, findTheme, reconcileThemeId } from "./themeCatalog.svelte";
+import { plugins } from "./plugins.svelte";
 
 export type Density = "compact" | "comfortable" | "roomy";
 
@@ -84,10 +85,14 @@ function persist(): void {
 }
 
 export async function loadAppearance(): Promise<void> {
+  let requestedTheme: string | null = null;
   try {
     const raw = await api.getSetting(APPEARANCE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<AppearanceState>;
+      if (typeof parsed.themeId === "string") {
+        requestedTheme = parsed.themeId;
+      }
       if (
         typeof parsed.themeId === "string" &&
         allThemes().some((theme) => theme.id === parsed.themeId)
@@ -114,6 +119,9 @@ export async function loadAppearance(): Promise<void> {
   appearance.themeId = reconcileThemeId(appearance.themeId);
   appearance.loaded = true;
   applyAppearance();
+  if (requestedTheme && requestedTheme !== appearance.themeId && plugins.loaded) {
+    persist();
+  }
 }
 
 export function setTheme(id: string): void {
@@ -124,11 +132,10 @@ export function setTheme(id: string): void {
 }
 
 export function reconcileTheme(): void {
-  const next = reconcileThemeId(appearance.themeId);
-  if (next === appearance.themeId) return;
-  appearance.themeId = next;
+  const previous = appearance.themeId;
+  appearance.themeId = reconcileThemeId(previous);
   applyAppearance();
-  persist();
+  if (appearance.themeId !== previous) persist();
 }
 
 export function setDensity(density: Density): void {

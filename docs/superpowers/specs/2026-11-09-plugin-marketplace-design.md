@@ -213,8 +213,8 @@ Integration payload:
   (`ollama`, `docker`, `podman`, `gh`, `rust-analyzer`, `claude`, `opencode`,
   `git`, `node`, `python3`, …). Unknown ids are rejected.
 - `notes`: 1–2000 characters, plain text rendered as text.
-- `docsUrl`: optional absolute HTTPS URL, shown as selectable text; GRAFT does
-  not open it.
+- `docsUrl`: optional absolute HTTPS URL, shown as a link the user may open
+  explicitly; GRAFT never opens it automatically.
 
 `minAppVersion` is compared with `env!("CARGO_PKG_VERSION")` using the `semver`
 crate. Unparseable versions are rejected.
@@ -240,14 +240,16 @@ The registry URL is stored in the setting `plugins.registryUrl`; an empty value
 shows an honest empty state.
 
 The **registry URL** requires HTTPS, except that plain HTTP is accepted for
-loopback hosts (`localhost`, `127.0.0.0/8`, `::1`) so a developer can serve a
+loopback and local hosts (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`,
+IPv4-mapped loopback, and unspecified addresses) so a developer can serve a
 local index. The loopback exception is scoped to the registry itself: when the
 registry URL is remote, every `manifestUrl` and `signatureUrl` in it must also
-be HTTPS and non-loopback. A remote registry therefore cannot make GRAFT probe
-local services. A loopback registry may point at HTTPS or loopback HTTP
-package URLs. URLs with credentials or fragments are rejected. Redirects are
-never followed. Timeouts: 20 s connect, 30 s total. Response limits: index
-1 MiB, manifest 64 KiB, signature 1 KiB, public key 256 bytes.
+be HTTPS and must not use a loopback or local host name. A remote registry
+therefore cannot point package URLs at local services. A loopback registry may
+point at HTTPS or loopback HTTP package URLs. URLs with credentials or fragments
+are rejected. Redirects are never followed. Timeouts: 20 s connect, 30 s total.
+Response limits: index 1 MiB, manifest 64 KiB, signature 1 KiB, public key 256
+bytes.
 
 The registry is fetched only when the Plugin Marketplace view opens or the
 user presses Refresh, never during application boot. Boot reads installed
@@ -429,7 +431,7 @@ Commands (all errors as `Result<T, String>` following existing modules):
 |---|---|---|
 | `plugin_installed` | none | `PluginRecord[]` |
 | `plugin_registry` | `url: String` | `PluginRegistry` |
-| `plugin_install` | `entry: RegistryPlugin`, `trustKey: bool`, `confirmed: bool` | `PluginRecord` |
+| `plugin_install` | `registryUrl: string`, `entry: RegistryPlugin`, `trustKey: bool`, `confirmed: bool` | `PluginRecord` |
 | `plugin_set_enabled` | `id: String`, `enabled: bool` | `PluginRecord` |
 | `plugin_uninstall` | `id: String`, `confirmed: bool` | `()` |
 | `plugin_keys` | none | `TrustedKey[]` |

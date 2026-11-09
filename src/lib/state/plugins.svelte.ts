@@ -103,8 +103,14 @@ export async function install(
 ): Promise<PluginRecord | null> {
   plugins.busyId = entry.id;
   plugins.installError = null;
+  const registryUrl = plugins.registryUrl.trim();
+  if (!registryUrl) {
+    plugins.installError = "Set a registry URL before installing.";
+    plugins.busyId = null;
+    return null;
+  }
   try {
-    const record = await api.pluginInstall(entry, trustKey, true);
+    const record = await api.pluginInstall(registryUrl, entry, trustKey, true);
     await reloadLocal();
     return record;
   } catch (error) {
