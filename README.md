@@ -7,7 +7,7 @@ review, monitoring, extraction and developer tooling in one lightweight applicat
 It is a native desktop instrument (Tauri 2 + Rust + Svelte 5), not a website in a
 window.
 
-> Status: **Phase 1–5 complete**. Real OAuth device-flow sign-in with the token kept in
+> Status: **Phase 1–6 complete**. Real OAuth device-flow sign-in with the token kept in
 > the system keyring, a live repository list, an in-app repository workspace (README,
 > code, commits, pull requests, issues, branches, releases), star/fork/clone, editing
 > text files where you have push access, and Git actions for local projects. A real PTY
@@ -24,8 +24,9 @@ window.
 > shared remote, package dependency and extraction history, and the status bar shows
 > the live GitHub rate limit. Personal AI connects eight providers with keys held in
 > the keyring, explicit context selection, streamed replies and saved conversations.
-> Plugins remain a scheduled phase and render explicit planned modules — never fake
-> data. See [`docs/PLAN.md`](docs/PLAN.md).
+> The Plugin Marketplace installs Ed25519-signed declarative themes and integration
+> notes from a registry you choose, with explicit key trust and no plugin code
+> execution. See [`docs/PLAN.md`](docs/PLAN.md).
 
 ![GRAFT repository workspace](docs/screenshots/repository.png)
 
@@ -80,6 +81,13 @@ window.
   are saved locally, while attached file contents are not. Pull requests and
   extraction analyses can open a pre-filled review conversation without submitting
   anything.
+- **Plugin Marketplace**: signed declarative packages from a registry you supply.
+  Theme packages contribute colour tokens; integration packages add notes for tools
+  GRAFT already detects. Every manifest is SHA-256 checked and Ed25519 verified, new
+  signing keys need explicit fingerprint trust, and stored records are re-verified on
+  read. Plugins cannot run code, open archives or name filesystem paths. The
+  integrations panel reports real detection status for Ollama, Docker, GitHub CLI,
+  rust-analyzer, Claude Code and OpenCode. No public registry is bundled.
 - **Notifications**: a persistent bell keeps pushes, pulls, checkouts, commits, file
   edits, forks and issues, and imports unread GitHub notifications from the website
   (mentions, reviews, issues, pull requests, workflow activity). Each item stays until
@@ -193,27 +201,36 @@ src/                  Svelte 5 interface
                       ModuleView
   lib/components/     shell, palette, dashboard panels, diff and graph renderers
   lib/state/          reactive state (appearance, nav, dashboard, github, notifications,
-                      sync, session, terminal, watchtower, library, extract, ai, ui)
+                      sync, session, terminal, watchtower, library, extract, ai,
+                      plugins, themeCatalog, ui)
   lib/api.ts          the only IPC surface
-src-tauri/src/        Rust engine (commands, db, schema, github, ai, git, secrets, tools,
-                      terminal, watchtower, library, extract, relations)
-  src-tauri/src/schema/  versioned SQL migrations (schema 6)
+src-tauri/src/        Rust engine (commands, db, schema, github, ai, plugins, git,
+                      secrets, tools, terminal, watchtower, library, extract,
+                      relations)
+  src-tauri/src/schema/  versioned SQL migrations (schema 7)
 docs/                 plan, architecture, design, product brief
 scripts/              icon rendering
 ```
 
 ## Storage and security
 
-- Database: `~/.local/share/dev.graft.desktop/graft.db` (SQLite, WAL, schema 6).
+- Database: `~/.local/share/dev.graft.desktop/graft.db` (SQLite, WAL, schema 7).
 - Secrets: GitHub tokens and AI provider keys live in the system keyring
   (`dev.graft.desktop` service). They are never written to SQLite, logs, localStorage
-  or the webview.
-- Network: all GitHub and AI requests are made by Rust. The webview CSP allows no
-  external connections and images only from GitHub's avatar, raw, camo and shields.io
-  badge hosts.
+  or the webview. Plugin signing keys are public; no private key ever enters GRAFT.
+- Network: all GitHub, AI and plugin-registry requests are made by Rust. The webview
+  CSP allows no external connections and images only from GitHub's avatar, raw, camo
+  and shields.io badge hosts.
 - AI context is opt-in: files are read only when attached, remote providers require a
   consent checkbox, paths are confined to the selected project, and attached contents
   are not persisted. AI output never executes tools or commands.
+- Plugins are data, not code. A manifest is capped at 64 KiB, its SHA-256 is checked
+  before parsing, its Ed25519 signature is verified over the exact bytes, and its
+  metadata must match the registry entry. Trust is per public-key fingerprint with an
+  explicit first-use checkbox; key changes and version downgrades are refused. Theme
+  colour values are strictly parsed before they reach CSS variables, and integration
+  notes are rendered as text. The registry is fetched only on the Plugins view or
+  Refresh, redirects are not followed, and uninstall/key removal require confirmation.
 - Repository file writes are available only when the GitHub API reports push access,
   and require a second confirmation naming the branch, path and commit message.
   Profile repository creation and status changes are separate confirmed writes.
@@ -229,5 +246,6 @@ scripts/              icon rendering
 - [`docs/PLAN.md`](docs/PLAN.md) — phases, decisions, open questions.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — boundaries, IPC, schema, security.
 - [`docs/DESIGN.md`](docs/DESIGN.md) — visual identity and token contract.
+- [`docs/plugins/registry.md`](docs/plugins/registry.md) — manifest, registry and signing reference.
 - [`docs/SPEC.md`](docs/SPEC.md) — binding product requirements.
 - [`AGENTS.md`](AGENTS.md) — working rules for contributors and coding agents.

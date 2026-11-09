@@ -9,7 +9,7 @@ Architecture: `docs/ARCHITECTURE.md`. Visual system: `docs/DESIGN.md`.
 
 ## Current status
 
-**Phase 1–5 complete for the shipped surfaces.** Phase 1a added auth, the repository
+**Phase 1–6 complete for the shipped surfaces.** Phase 1a added auth, the repository
 list and local Git inspection. Phase 1b added the in-app repository workspace
 (README, code tree, commits, pull requests, issues, branches), star/fork/clone, and
 fetch/pull/push for linked projects. Phase 1 also ships the real PTY terminal
@@ -34,6 +34,10 @@ Releases and a live GitHub rate-limit chip round out the workspace. Phase 5 adds
 Personal AI workspace: eight provider adapters, keyring-held keys, explicit local
 context selection with remote-provider consent, streamed replies with cancellation,
 saved conversations, and review and extraction assistants that only prefill a chat.
+Phase 6 adds the Plugin Marketplace: Ed25519-signed declarative JSON packages for
+themes and integration metadata, a user-supplied registry client, trust-on-first-use
+key review, and a real environment panel for Ollama, Docker, `gh`, rust-analyzer,
+Claude Code and OpenCode. No plugin code runs, and no public registry is bundled.
 Phase 0 is complete and verified as well.
 
 Delivered in Phase 1a:
@@ -296,11 +300,47 @@ extraction. Phase 5 is complete and verified.
 
 ---
 
-## Phase 6 — Marketplace
+## Phase 6 — Marketplace (complete)
 
-Plugin manifest spec, capability permissions, signed plugin verification, registry
-and installer, theme marketplace, external integrations (Ollama, Docker, `gh`,
-rust-analyzer, Claude Code, OpenCode).
+`plugins.rs` implements signed **declarative** packages. A package is a JSON
+manifest plus a detached Ed25519 signature; there is no executable, archive or
+filesystem payload. Manifest schema 1 is at most 64 KiB, rejects unknown fields,
+and has two kinds:
+
+- **theme** — `theme.apply`, one of the 17 colour tokens plus `scheme` and a blurb.
+  Colour values accept only `#rgb`/`#rrggbb`/`#rrggbbaa` or `rgba(...)`; named
+  colours, `var()`, `url()` and gradients are rejected. Installed themes join the
+  built-in catalog as `plugin:<id>` in Settings and the command palette.
+- **integration** — `integration.inspect`, one or more ids from the fixed
+  `tools.rs` allowlist plus plain-text notes and an optional HTTPS docs URL. It
+  never installs, launches or configures a tool.
+
+A user supplies the registry URL; GRAFT does not bundle or invent a public
+registry. The index is schema 1, at most 1 MiB and 500 entries, and must use HTTPS
+except for loopback development. When the registry is remote, package URLs must be
+HTTPS and non-loopback, so a hostile index cannot make GRAFT probe local services.
+Rust checks the manifest SHA-256 before parsing, verifies the signature over the
+exact bytes, and checks the manifest id, version, kind, name and summary against
+the index. Redirects are not followed.
+
+Trust is per public-key fingerprint (SHA-256 of the raw key, trust-on-first-use).
+A new key requires an explicit checkbox and `trustKey`; every install requires the
+review acknowledgement. A key change for an installed id is refused until
+uninstall, as are version downgrades and packages requiring a newer GRAFT.
+Installed records live in schema 7 (`plugins`, `plugin_keys`) and are re-verified
+on read and enable; a tampered row is shown as unverified and never applied.
+Uninstall and key removal are confirmed and re-validated in Rust.
+
+The Marketplace view reads the registry only when opened or refreshed, never on
+boot. It shows installed themes and integrations, the browse/review/trust flow,
+trusted keys with their users, and real detection status for Ollama, Docker, `gh`,
+rust-analyzer, Claude Code and OpenCode. With no registry configured it shows an
+honest empty state, not sample plugins.
+
+Deferred: executable and WASM plugin hosts, auto-update and background polling,
+publishing/upload, a first-party public registry, and deeper panel extension
+points (Phase 7). Phase 6 is complete and verified with 69 Rust tests; the live
+loopback UI pass is still to be performed where a desktop session is available.
 
 ---
 
