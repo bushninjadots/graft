@@ -2,7 +2,6 @@
   import { onMount } from "svelte";
   import { api } from "../lib/api";
   import { NAV_ITEMS, navById } from "../lib/nav";
-  import { themes } from "../lib/themes";
   import { plural } from "../lib/format";
   import {
     appearance,
@@ -11,6 +10,7 @@
     setTheme,
     type Density,
   } from "../lib/state/appearance.svelte";
+  import { allThemes } from "../lib/state/themeCatalog.svelte";
   import { moveNav, navState, resetNav, toggleHidden, togglePinned } from "../lib/state/nav.svelte";
   import { dashboard, resetDashboard } from "../lib/state/dashboard.svelte";
   import { refreshTools, session } from "../lib/state/session.svelte";
@@ -33,6 +33,8 @@
   const orderedItems = $derived(
     navState.order.map((id) => navById(id)).filter((item) => !!item),
   );
+
+  const themeList = $derived(allThemes());
 
   const foundCount = $derived(session.tools.filter((tool) => tool.found).length);
 
@@ -77,7 +79,7 @@
     </div>
 
     <div class="theme-grid">
-      {#each themes as theme (theme.id)}
+      {#each themeList as theme (theme.id)}
         <button
           class="theme"
           class:active={appearance.themeId === theme.id}

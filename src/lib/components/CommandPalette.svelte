@@ -5,7 +5,7 @@
   import { resetDashboard } from "../state/dashboard.svelte";
   import { resetNav } from "../state/nav.svelte";
   import { ui, navigate } from "../state/ui.svelte";
-  import { themes } from "../themes";
+  import { allThemes } from "../state/themeCatalog.svelte";
   import Icon from "./Icon.svelte";
 
   type Command = {
@@ -16,7 +16,7 @@
     run: () => void;
   };
 
-  const commands: Command[] = [
+  const commands: Command[] = $derived([
     ...NAV_ITEMS.map((item) => ({
       id: `go:${item.id}`,
       label: `Open ${item.label}`,
@@ -24,7 +24,7 @@
       hint: item.status === "planned" ? `Phase ${item.phase}` : "Ready",
       run: () => navigate(item.id),
     })),
-    ...themes.map((theme) => ({
+    ...allThemes().map((theme) => ({
       id: `theme:${theme.id}`,
       label: `Theme: ${theme.name}`,
       group: "Appearance",
@@ -73,7 +73,7 @@
       hint: "Show every module again",
       run: () => resetNav(),
     },
-  ];
+  ]);
 
   let query = $state("");
   let index = $state(0);

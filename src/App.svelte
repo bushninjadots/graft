@@ -27,6 +27,7 @@
   import { boot, refreshTools, session } from "./lib/state/session.svelte";
   import { syncAll } from "./lib/state/sync.svelte";
   import { loadWatchtower } from "./lib/state/watchtower.svelte";
+  import { loadPlugins } from "./lib/state/plugins.svelte";
 
   const active = $derived(
     navById(ui.view === "repository" ? "repositories" : ui.view) ?? navById("home")!,
@@ -37,6 +38,7 @@
 
     void (async () => {
       await boot();
+      await loadPlugins();
       await Promise.all([loadAppearance(), loadNav(), loadDashboard(), loadWatchtower()]);
       await refreshTools();
       if (session.online) void syncAll(true);

@@ -1,5 +1,6 @@
 import { api } from "../api";
-import { DEFAULT_THEME_ID, themeById, themes, type Theme } from "../themes";
+import { DEFAULT_THEME_ID, type Theme } from "../themes";
+import { allThemes, findTheme, reconcileThemeId } from "./themeCatalog.svelte";
 
 export type Density = "compact" | "comfortable" | "roomy";
 
@@ -22,7 +23,7 @@ export const appearance = $state<AppearanceState>({
 });
 
 export function currentTheme(): Theme {
-  return themeById(appearance.themeId);
+  return findTheme(appearance.themeId);
 }
 
 /** Writes the active theme tokens onto :root. The only place colours are set. */
@@ -87,7 +88,10 @@ export async function loadAppearance(): Promise<void> {
     const raw = await api.getSetting(APPEARANCE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<AppearanceState>;
-      if (typeof parsed.themeId === "string" && themes.some((t) => t.id === parsed.themeId)) {
+      if (
+        typeof parsed.themeId === "string" &&
+        allThemes().some((theme) => theme.id === parsed.themeId)
+      ) {
         appearance.themeId = parsed.themeId;
       }
       if (
@@ -107,13 +111,22 @@ export async function loadAppearance(): Promise<void> {
   } catch {
     /* keep defaults */
   }
+  appearance.themeId = reconcileThemeId(appearance.themeId);
   appearance.loaded = true;
   applyAppearance();
 }
 
 export function setTheme(id: string): void {
-  if (!themes.some((theme) => theme.id === id)) return;
+  if (!allThemes().some((theme) => theme.id === id)) return;
   appearance.themeId = id;
+  applyAppearance();
+  persist();
+}
+
+export function reconcileTheme(): void {
+  const next = reconcileThemeId(appearance.themeId);
+  if (next === appearance.themeId) return;
+  appearance.themeId = next;
   applyAppearance();
   persist();
 }
@@ -136,7 +149,7 @@ export function toggleSidebar(): void {
 }
 
 export function nextTheme(direction: 1 | -1 = 1): void {
-  const order = themes.map((theme) => theme.id);
+  const order = allThemes().map((theme) => theme.id);
   const index = order.indexOf(appearance.themeId);
   const next = order[(index + direction + order.length) % order.length];
   setTheme(next);
