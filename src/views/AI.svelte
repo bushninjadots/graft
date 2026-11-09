@@ -80,6 +80,27 @@
     return DOMPurify.sanitize(typeof parsed === "string" ? parsed : "");
   }
 
+  function externalLinks(node: HTMLElement) {
+    node.addEventListener("click", openLink);
+    return {
+      destroy() {
+        node.removeEventListener("click", openLink);
+      },
+    };
+  }
+
+  function openLink(event: MouseEvent): void {
+    const anchor = (event.target as HTMLElement | null)?.closest("a");
+    if (!anchor) return;
+    event.preventDefault();
+    const href = anchor.getAttribute("href");
+    if (!href || !/^https?:\/\//i.test(href)) return;
+    void api.openExternal(href).catch((cause) => {
+      const text = cause instanceof Error ? cause.message : String(cause);
+      notify(text, "danger");
+    });
+  }
+
   function chooseProject(value: string): void {
     const id = value ? Number(value) : null;
     setContextProject(Number.isFinite(id) ? id : null);
@@ -406,7 +427,7 @@
                 {/if}
               </header>
               {#if item.role === "assistant"}
-                <div class="markdown">{@html render(item.content)}</div>
+                <div class="markdown" use:externalLinks>{@html render(item.content)}</div>
               {:else}
                 <p class="user-text">{item.content}</p>
               {/if}
@@ -424,7 +445,7 @@
               <span class="mono faint">{ai.cancelling ? "stopping…" : "streaming…"}</span>
             </header>
             {#if ai.streamText}
-              <div class="markdown">{@html render(ai.streamText)}</div>
+              <div class="markdown" use:externalLinks>{@html render(ai.streamText)}</div>
             {:else}
               <p class="thinking mono faint">waiting for the first token…</p>
             {/if}

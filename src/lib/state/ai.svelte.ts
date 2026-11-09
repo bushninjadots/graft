@@ -100,7 +100,6 @@ export function usesLocalEndpoint(): boolean {
     const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
     return (
       host === "localhost" ||
-      host.endsWith(".localhost") ||
       host === "::1" ||
       /^127\./.test(host)
     );
@@ -219,6 +218,7 @@ export function setModel(value: string): void {
 
 export function setEndpoint(value: string): void {
   ai.endpoint = value;
+  ai.consent = false;
   persistPreferences();
 }
 
@@ -278,6 +278,7 @@ export async function openConversation(id: number): Promise<void> {
       ai.providerId = detail.conversation.provider;
       ai.model = detail.conversation.model;
       ai.endpoint = detail.conversation.endpoint || provider()?.defaultEndpoint || ai.endpoint;
+      ai.consent = false;
     }
   } catch (cause) {
     ai.error = message(cause);
