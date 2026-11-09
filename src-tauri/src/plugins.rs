@@ -1,9 +1,13 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ed25519_dalek::{Signature, VerifyingKey};
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
+use tauri::State;
 
+use crate::db::{now, Db};
 use crate::tools;
 
 const MANIFEST_MAX_BYTES: usize = 64 * 1024;
@@ -632,6 +636,470 @@ pub fn check_min_app_version(value: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginRecord {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub kind: PluginKind,
+    pub summary: String,
+    pub author: String,
+    pub capabilities: Vec<String>,
+    pub enabled: bool,
+    pub verified: bool,
+    pub fingerprint: String,
+    pub installed_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemePayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integration: Option<IntegrationPayload>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrustedKey {
+    pub fingerprint: String,
+    pub public_key: String,
+    pub label: String,
+    pub added_at: i64,
+    pub used_by: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct StoredPlugin {
+    id: String,
+    name: String,
+    version: String,
+    kind: String,
+    summary: String,
+    author: String,
+    manifest: String,
+    signature: String,
+    public_key: String,
+    fingerprint: String,
+    enabled: bool,
+    installed_at: i64,
+}
+
+impl StoredPlugin {
+    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        let enabled: i64 = row.get(10)?;
+        Ok(Self {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            version: row.get(2)?,
+            kind: row.get(3)?,
+            summary: row.get(4)?,
+            author: row.get(5)?,
+            manifest: row.get(6)?,
+            signature: row.get(7)?,
+            public_key: row.get(8)?,
+            fingerprint: row.get(9)?,
+            enabled: enabled != 0,
+            installed_at: row.get(11)?,
+        })
+    }
+}
+
+fn conn(db: &Db) -> std::sync::MutexGuard<'_, rusqlite::Connection> {
+    db.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn kind_str(kind: PluginKind) -> &'static str {
+    match kind {
+        PluginKind::Theme => "theme",
+        PluginKind::Integration => "integration",
+    }
+}
+
+fn kind_from_str(value: &str) -> Result<PluginKind, String> {
+    match value {
+        "theme" => Ok(PluginKind::Theme),
+        "integration" => Ok(PluginKind::Integration),
+        _ => Err(format!("Unknown plugin kind: {value}.")),
+    }
+}
+
+fn capabilities_for(kind: PluginKind) -> Vec<String> {
+    vec![match kind {
+        PluginKind::Theme => "theme.apply",
+        PluginKind::Integration => "integration.inspect",
+    }
+    .to_string()]
+}
+
+fn stored_plugin(db: &Db, id: &str) -> Result<StoredPlugin, String> {
+    let conn = conn(db);
+    conn.query_row(
+        "SELECT id, name, version, kind, summary, author, manifest, signature,
+                public_key, fingerprint, enabled, installed_at
+         FROM plugins WHERE id = ?1",
+        params![id],
+        StoredPlugin::from_row,
+    )
+    .optional()
+    .map_err(|error| format!("cannot read the plugin: {error}"))?
+    .ok_or_else(|| "Plugin not found.".to_string())
+}
+
+fn is_trusted(db: &Db, fingerprint: &str) -> Result<bool, String> {
+    let count: i64 = conn(db)
+        .query_row(
+            "SELECT COUNT(*) FROM plugin_keys WHERE fingerprint = ?1",
+            params![fingerprint],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("cannot read plugin trust: {error}"))?;
+    Ok(count > 0)
+}
+
+fn read_keys(db: &Db) -> Result<Vec<TrustedKey>, String> {
+    let conn = conn(db);
+    let mut used_by: HashMap<String, Vec<String>> = HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT fingerprint, id FROM plugins ORDER BY id ASC")
+            .map_err(|error| format!("cannot query plugin key usage: {error}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| format!("cannot read plugin key usage: {error}"))?;
+        for row in rows {
+            let (fingerprint, id) =
+                row.map_err(|error| format!("cannot decode plugin key usage: {error}"))?;
+            used_by.entry(fingerprint).or_default().push(id);
+        }
+    }
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT fingerprint, public_key, label, added_at
+             FROM plugin_keys ORDER BY added_at ASC, fingerprint ASC",
+        )
+        .map_err(|error| format!("cannot query trusted plugin keys: {error}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(TrustedKey {
+                fingerprint: row.get(0)?,
+                public_key: row.get(1)?,
+                label: row.get(2)?,
+                added_at: row.get(3)?,
+                used_by: Vec::new(),
+            })
+        })
+        .map_err(|error| format!("cannot read trusted plugin keys: {error}"))?;
+    let mut keys = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("cannot decode trusted plugin keys: {error}"))?;
+    for key in &mut keys {
+        key.used_by = used_by.remove(&key.fingerprint).unwrap_or_default();
+    }
+    Ok(keys)
+}
+
+fn verify_row(row: &StoredPlugin, trusted: bool) -> Result<Manifest, String> {
+    if !trusted {
+        return Err("The plugin signing key is not trusted.".into());
+    }
+    let key = decode_public_key(&row.public_key)?;
+    if !fingerprint(&key).eq_ignore_ascii_case(&row.fingerprint) {
+        return Err("The stored plugin key does not match its fingerprint.".into());
+    }
+    let manifest = parse_manifest(row.manifest.as_bytes())?;
+    verify_manifest_signature(row.manifest.as_bytes(), &row.signature, &row.public_key)?;
+    if manifest.id != row.id
+        || manifest.name != row.name
+        || manifest.version != row.version
+        || manifest.kind != kind_from_str(&row.kind)?
+        || manifest.summary != row.summary
+        || manifest.author != row.author
+    {
+        return Err("The stored plugin metadata does not match its signed manifest.".into());
+    }
+    Ok(manifest)
+}
+
+fn record_from_row(row: &StoredPlugin, trusted: bool) -> PluginRecord {
+    let verified = verify_row(row, trusted);
+    let valid = verified.is_ok();
+    let (kind, capabilities, theme, integration) = match verified {
+        Ok(manifest) => (
+            manifest.kind,
+            manifest.capabilities,
+            manifest.theme,
+            manifest.integration,
+        ),
+        Err(_) => {
+            let kind = kind_from_str(&row.kind);
+            let capabilities = kind
+                .as_ref()
+                .map(|kind| capabilities_for(*kind))
+                .unwrap_or_default();
+            (kind.unwrap_or(PluginKind::Theme), capabilities, None, None)
+        }
+    };
+    PluginRecord {
+        id: row.id.clone(),
+        name: row.name.clone(),
+        version: row.version.clone(),
+        kind,
+        summary: row.summary.clone(),
+        author: row.author.clone(),
+        capabilities,
+        enabled: row.enabled,
+        verified: valid,
+        fingerprint: row.fingerprint.clone(),
+        installed_at: row.installed_at,
+        theme,
+        integration,
+    }
+}
+
+fn read_installed(db: &Db) -> Result<Vec<PluginRecord>, String> {
+    let conn = conn(db);
+    let trusted: HashSet<String> = {
+        let mut stmt = conn
+            .prepare("SELECT fingerprint FROM plugin_keys")
+            .map_err(|error| format!("cannot query plugin trust: {error}"))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| format!("cannot read plugin trust: {error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("cannot decode plugin trust: {error}"))?
+            .into_iter()
+            .collect()
+    };
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, name, version, kind, summary, author, manifest, signature,
+                    public_key, fingerprint, enabled, installed_at
+             FROM plugins ORDER BY installed_at DESC, id ASC",
+        )
+        .map_err(|error| format!("cannot query installed plugins: {error}"))?;
+    let rows = stmt
+        .query_map([], StoredPlugin::from_row)
+        .map_err(|error| format!("cannot read installed plugins: {error}"))?;
+    let mut records = Vec::new();
+    for row in rows {
+        let row = row.map_err(|error| format!("cannot decode installed plugin: {error}"))?;
+        records.push(record_from_row(&row, trusted.contains(&row.fingerprint)));
+    }
+    Ok(records)
+}
+
+fn read_plugin(db: &Db, id: &str) -> Result<PluginRecord, String> {
+    read_installed(db)?
+        .into_iter()
+        .find(|record| record.id == id)
+        .ok_or_else(|| "Plugin not found.".to_string())
+}
+
+pub fn install_verified(
+    db: &Db,
+    entry: &RegistryPlugin,
+    manifest_bytes: &[u8],
+    signature_b64: &str,
+    trust_key: bool,
+    confirmed: bool,
+) -> Result<PluginRecord, String> {
+    if !confirmed {
+        return Err("Installing a plugin requires explicit confirmation.".into());
+    }
+    if !sha256_hex(manifest_bytes).eq_ignore_ascii_case(entry.manifest_sha256.trim()) {
+        return Err("The plugin manifest does not match the registry hash.".into());
+    }
+
+    let manifest = parse_manifest(manifest_bytes)?;
+    check_entry_matches(&manifest, entry)?;
+    check_min_app_version(manifest.min_app_version.as_deref())?;
+
+    let key = decode_public_key(&entry.public_key)?;
+    let key_fingerprint = fingerprint(&key);
+    if !key_fingerprint.eq_ignore_ascii_case(entry.fingerprint.trim()) {
+        return Err("The plugin signing key does not match the registry fingerprint.".into());
+    }
+    verify_manifest_signature(manifest_bytes, signature_b64, &entry.public_key)?;
+
+    let manifest_text = std::str::from_utf8(manifest_bytes)
+        .map_err(|_| "The manifest is not UTF-8.".to_string())?;
+    let public_key = entry.public_key.trim().to_string();
+    let label: String = manifest.author.trim().chars().take(100).collect();
+    let now_value = now();
+
+    {
+        let mut connection = conn(db);
+        let tx = connection
+            .transaction()
+            .map_err(|error| format!("cannot start the plugin install: {error}"))?;
+
+        let existing: Option<(String, String)> = tx
+            .query_row(
+                "SELECT version, fingerprint FROM plugins WHERE id = ?1",
+                params![manifest.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| format!("cannot read the installed plugin: {error}"))?;
+        check_version(
+            existing.as_ref().map(|(version, _)| version.as_str()),
+            existing
+                .as_ref()
+                .map(|(_, fingerprint)| fingerprint.as_str()),
+            &manifest.version,
+            &key_fingerprint,
+        )?;
+
+        let trusted: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM plugin_keys WHERE fingerprint = ?1",
+                params![key_fingerprint],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("cannot read plugin trust: {error}"))?;
+        if trusted == 0 && !trust_key {
+            return Err(
+                "This plugin uses a new signing key. Review the fingerprint and trust the publisher before installing."
+                    .into(),
+            );
+        }
+
+        tx.execute(
+            "INSERT OR IGNORE INTO plugin_keys (fingerprint, public_key, label, added_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![key_fingerprint, public_key, label, now_value],
+        )
+        .map_err(|error| format!("cannot save the trusted plugin key: {error}"))?;
+
+        tx.execute(
+            "INSERT INTO plugins
+                (id, name, version, kind, summary, author, manifest, signature,
+                 public_key, fingerprint, enabled, installed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11)
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                version = excluded.version,
+                kind = excluded.kind,
+                summary = excluded.summary,
+                author = excluded.author,
+                manifest = excluded.manifest,
+                signature = excluded.signature,
+                public_key = excluded.public_key,
+                fingerprint = excluded.fingerprint",
+            params![
+                manifest.id.as_str(),
+                manifest.name.as_str(),
+                manifest.version.as_str(),
+                kind_str(manifest.kind),
+                manifest.summary.as_str(),
+                manifest.author.as_str(),
+                manifest_text,
+                signature_b64.trim(),
+                public_key.as_str(),
+                key_fingerprint.as_str(),
+                now_value
+            ],
+        )
+        .map_err(|error| format!("cannot save the plugin: {error}"))?;
+        tx.commit()
+            .map_err(|error| format!("cannot finish the plugin install: {error}"))?;
+    }
+
+    read_plugin(db, &manifest.id)
+}
+
+pub fn set_plugin_enabled(db: &Db, id: &str, enabled: bool) -> Result<PluginRecord, String> {
+    let row = stored_plugin(db, id)?;
+    if enabled {
+        verify_row(&row, is_trusted(db, &row.fingerprint)?)?;
+    }
+    let changed = conn(db)
+        .execute(
+            "UPDATE plugins SET enabled = ?1 WHERE id = ?2",
+            params![if enabled { 1i64 } else { 0i64 }, id],
+        )
+        .map_err(|error| format!("cannot update the plugin: {error}"))?;
+    if changed == 0 {
+        return Err("Plugin not found.".into());
+    }
+    read_plugin(db, id)
+}
+
+pub fn uninstall_plugin(db: &Db, id: &str, confirmed: bool) -> Result<(), String> {
+    if !confirmed {
+        return Err("Uninstalling a plugin requires explicit confirmation.".into());
+    }
+    let changed = conn(db)
+        .execute("DELETE FROM plugins WHERE id = ?1", params![id])
+        .map_err(|error| format!("cannot remove the plugin: {error}"))?;
+    if changed == 0 {
+        return Err("Plugin not found.".into());
+    }
+    Ok(())
+}
+
+pub fn remove_trusted_key(db: &Db, fingerprint: &str, confirmed: bool) -> Result<(), String> {
+    if !confirmed {
+        return Err("Removing a trusted key requires explicit confirmation.".into());
+    }
+    let fingerprint = fingerprint.trim().to_ascii_lowercase();
+    let in_use: i64 = conn(db)
+        .query_row(
+            "SELECT COUNT(*) FROM plugins WHERE fingerprint = ?1",
+            params![fingerprint],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("cannot check plugin key usage: {error}"))?;
+    if in_use > 0 {
+        return Err("This key still signs installed plugins. Uninstall them first.".into());
+    }
+    let changed = conn(db)
+        .execute(
+            "DELETE FROM plugin_keys WHERE fingerprint = ?1",
+            params![fingerprint],
+        )
+        .map_err(|error| format!("cannot remove the trusted key: {error}"))?;
+    if changed == 0 {
+        return Err("Trusted key not found.".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn plugin_installed(db: State<'_, Db>) -> Result<Vec<PluginRecord>, String> {
+    read_installed(&db)
+}
+
+#[tauri::command]
+pub fn plugin_set_enabled(
+    db: State<'_, Db>,
+    id: String,
+    enabled: bool,
+) -> Result<PluginRecord, String> {
+    set_plugin_enabled(&db, &id, enabled)
+}
+
+#[tauri::command]
+pub fn plugin_uninstall(db: State<'_, Db>, id: String, confirmed: bool) -> Result<(), String> {
+    uninstall_plugin(&db, &id, confirmed)
+}
+
+#[tauri::command]
+pub fn plugin_keys(db: State<'_, Db>) -> Result<Vec<TrustedKey>, String> {
+    read_keys(&db)
+}
+
+#[tauri::command]
+pub fn plugin_remove_key(
+    db: State<'_, Db>,
+    fingerprint: String,
+    confirmed: bool,
+) -> Result<(), String> {
+    remove_trusted_key(&db, &fingerprint, confirmed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -920,5 +1388,164 @@ mod tests {
 
         assert!(check_min_app_version(Some("0.1.0")).is_ok());
         assert!(check_min_app_version(Some("999.0.0")).is_err());
+    }
+
+    fn temp_db(label: &str) -> (std::path::PathBuf, Db) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!(
+            "graft-plugins-{label}-{}-{nanos}.db",
+            std::process::id()
+        ));
+        let db = Db::open(&path).expect("open database");
+        (path, db)
+    }
+
+    fn cleanup(path: &std::path::Path) {
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    fn signed_theme(version: &str, key: &SigningKey) -> (Vec<u8>, String, String) {
+        let mut value = theme_value();
+        value["version"] = json!(version);
+        let manifest = bytes(&value);
+        let signature = STANDARD.encode(key.sign(&manifest).to_bytes());
+        (manifest, signature, key_b64(key))
+    }
+
+    #[test]
+    fn installs_reads_and_reverifies_themes() {
+        let (path, db) = temp_db("install");
+        let key = SigningKey::from_bytes(&[7u8; 32]);
+        let (manifest, signature, public_key) = signed_theme("1.0.0", &key);
+        let entry = entry_for(&manifest, &public_key);
+
+        let record =
+            install_verified(&db, &entry, &manifest, &signature, true, true).expect("install");
+        assert!(record.verified && record.enabled);
+        assert_eq!(
+            record.fingerprint,
+            fingerprint(&key.verifying_key().to_bytes())
+        );
+        assert!(record.theme.is_some());
+        assert_eq!(read_installed(&db).expect("list").len(), 1);
+        assert_eq!(read_keys(&db).expect("keys").len(), 1);
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn requires_confirmation_and_explicit_first_trust() {
+        let (path, db) = temp_db("trust");
+        let key = SigningKey::from_bytes(&[7u8; 32]);
+        let (manifest, signature, public_key) = signed_theme("1.0.0", &key);
+        let entry = entry_for(&manifest, &public_key);
+
+        assert!(install_verified(&db, &entry, &manifest, &signature, false, true).is_err());
+        assert!(install_verified(&db, &entry, &manifest, &signature, true, false).is_err());
+        install_verified(&db, &entry, &manifest, &signature, true, true).expect("first trust");
+        install_verified(&db, &entry, &manifest, &signature, false, true).expect("trusted key");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn refuses_downgrades_and_silent_key_changes() {
+        let (path, db) = temp_db("versions");
+        let first = SigningKey::from_bytes(&[7u8; 32]);
+        let second = SigningKey::from_bytes(&[8u8; 32]);
+
+        let (manifest, signature, public_key) = signed_theme("1.1.0", &first);
+        install_verified(
+            &db,
+            &entry_for(&manifest, &public_key),
+            &manifest,
+            &signature,
+            true,
+            true,
+        )
+        .expect("initial install");
+
+        let (old_manifest, old_signature, old_key) = signed_theme("1.0.0", &first);
+        assert!(install_verified(
+            &db,
+            &entry_for(&old_manifest, &old_key),
+            &old_manifest,
+            &old_signature,
+            false,
+            true,
+        )
+        .is_err());
+
+        let (new_manifest, new_signature, new_key) = signed_theme("2.0.0", &second);
+        assert!(install_verified(
+            &db,
+            &entry_for(&new_manifest, &new_key),
+            &new_manifest,
+            &new_signature,
+            true,
+            true,
+        )
+        .is_err());
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn tampered_rows_are_unverified_and_enable_fails() {
+        let (path, db) = temp_db("tamper");
+        let key = SigningKey::from_bytes(&[7u8; 32]);
+        let (manifest, signature, public_key) = signed_theme("1.0.0", &key);
+        let record = install_verified(
+            &db,
+            &entry_for(&manifest, &public_key),
+            &manifest,
+            &signature,
+            true,
+            true,
+        )
+        .expect("install");
+
+        set_plugin_enabled(&db, &record.id, false).expect("disable");
+        conn(&db)
+            .execute(
+                "UPDATE plugins SET signature = 'AAAA' WHERE id = ?1",
+                [&record.id],
+            )
+            .expect("tamper");
+        let listed = read_installed(&db).expect("list");
+        assert!(!listed[0].verified);
+        assert!(listed[0].theme.is_none());
+        assert!(set_plugin_enabled(&db, &record.id, true).is_err());
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn removal_requires_confirmation_and_refuses_in_use_keys() {
+        let (path, db) = temp_db("remove");
+        let key = SigningKey::from_bytes(&[7u8; 32]);
+        let (manifest, signature, public_key) = signed_theme("1.0.0", &key);
+        let record = install_verified(
+            &db,
+            &entry_for(&manifest, &public_key),
+            &manifest,
+            &signature,
+            true,
+            true,
+        )
+        .expect("install");
+
+        assert!(remove_trusted_key(&db, &record.fingerprint, true).is_err());
+        assert!(uninstall_plugin(&db, &record.id, false).is_err());
+        uninstall_plugin(&db, &record.id, true).expect("uninstall");
+        assert!(remove_trusted_key(&db, &record.fingerprint, false).is_err());
+        remove_trusted_key(&db, &record.fingerprint, true).expect("remove key");
+
+        cleanup(&path);
     }
 }

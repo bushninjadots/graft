@@ -124,6 +124,11 @@ pub fn run() {
             ai::ai_context_read,
             ai::ai_cancel,
             ai::ai_chat,
+            plugins::plugin_installed,
+            plugins::plugin_set_enabled,
+            plugins::plugin_uninstall,
+            plugins::plugin_keys,
+            plugins::plugin_remove_key,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start GRAFT");
