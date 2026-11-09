@@ -5,6 +5,7 @@ mod git;
 mod github;
 mod library;
 mod profile;
+mod relations;
 mod secrets;
 mod terminal;
 mod tools;
@@ -51,6 +52,7 @@ pub fn run() {
             terminal::terminal_resize,
             terminal::terminal_close,
             github::github_status,
+            github::github_rate_limit,
             github::github_set_client_id,
             github::github_start_device,
             github::github_poll_device,
@@ -79,6 +81,7 @@ pub fn run() {
             github::github_publish_profile,
             github::github_save_file,
             github::github_repo_issues,
+            github::github_repo_releases,
             github::github_create_issue,
             github::github_create_profile_repo,
             watchtower::watchtower_snapshot,
@@ -107,6 +110,7 @@ pub fn run() {
             extract::extract_plan,
             extract::extract_execute,
             extract::extract_runs,
+            relations::project_graph,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start GRAFT");

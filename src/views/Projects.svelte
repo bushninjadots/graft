@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, type GitActionResult, type GitBranch, type GitStatus, type Project } from "../lib/api";
+  import { api, type GitActionResult, type GitBranch, type GitStatus, type Project, type ProjectEdge, type ProjectGraph } from "../lib/api";
   import { absoluteTime, plural, relativeTime } from "../lib/format";
   import { session } from "../lib/state/session.svelte";
   import { notify } from "../lib/state/ui.svelte";
@@ -10,6 +10,9 @@
   let projects = $state<Project[]>([]);
   let loading = $state(true);
   let loadError = $state<string | null>(null);
+  let graph = $state<ProjectGraph | null>(null);
+  let graphLoading = $state(false);
+  let graphError = $state<string | null>(null);
 
   let creating = $state(false);
   let submitting = $state(false);
@@ -42,6 +45,7 @@
     try {
       projects = await api.listProjects();
       void refreshGit();
+      void loadGraph();
     } catch (cause) {
       loadError = cause instanceof Error ? cause.message : String(cause);
     } finally {
@@ -113,6 +117,23 @@
   function gitInfo(id: number): GitStatus | null {
     const value = gitStates[id];
     return value && value !== "loading" ? value : null;
+  }
+
+  async function loadGraph(): Promise<void> {
+    if (graphLoading) return;
+    graphLoading = true;
+    graphError = null;
+    try {
+      graph = await api.projectGraph();
+    } catch (cause) {
+      graphError = cause instanceof Error ? cause.message : String(cause);
+    } finally {
+      graphLoading = false;
+    }
+  }
+
+  function edgeKind(kind: ProjectEdge["kind"]): string {
+    return kind === "shared-remote" ? "shared remote" : kind === "depends-on" ? "depends on" : kind;
   }
 
   async function detectDirectory(): Promise<void> {
@@ -636,6 +657,55 @@
         </li>
       {/each}
     </ul>
+    <div class="relations panel">
+      <div class="relations-head">
+        <span class="mono-label">relationships</span>
+        <div class="row">
+          {#if graph}
+            <span class="mono-label faint">
+              {plural(graph.nodes.length, "project")} · {plural(graph.edges.length, "edge")}
+            </span>
+          {/if}
+          <button class="btn ghost" onclick={loadGraph} disabled={graphLoading}>
+            {graphLoading ? "Scanning…" : "Scan"}
+          </button>
+        </div>
+      </div>
+      {#if graphError}
+        <p class="state tone-danger">{graphError}</p>
+      {:else if graphLoading && !graph}
+        <p class="state mono">reading remotes, manifests and extraction runs…</p>
+      {:else if graph}
+        {#if graph.edges.length === 0}
+          <p class="state">
+            No shared remotes, extraction runs or local package dependencies connect these projects.
+          </p>
+        {:else}
+          <ul class="edges">
+            {#each graph.edges as edge (edge.source + "-" + edge.target + "-" + edge.kind)}
+              {@const from = graph.nodes.find((item) => item.id === edge.source)}
+              {@const to = graph.nodes.find((item) => item.id === edge.target)}
+              {#if from && to}
+                <li class="edge">
+                  <span class="name mono">{from.name}</span>
+                  <span class="kind mono">{edgeKind(edge.kind)}</span>
+                  <span class="arrow mono">→</span>
+                  <span class="name mono">{to.name}</span>
+                  <span class="detail mono faint" title={edge.label}>{edge.label}</span>
+                </li>
+              {/if}
+            {/each}
+          </ul>
+        {/if}
+        {#if graph.warnings.length > 0}
+          <ul class="graph-warnings">
+            {#each graph.warnings as warning}
+              <li class="mono faint">{warning}</li>
+            {/each}
+          </ul>
+        {/if}
+      {/if}
+    </div>
     <p class="footnote mono-label">
       Deleting a project removes its GRAFT record only. Files on disk are never touched.
     </p>
@@ -996,6 +1066,75 @@
     color: var(--danger);
     background: transparent;
     height: 22px;
+  }
+
+  .relations {
+    margin-top: 8px;
+    padding: 0 10px 9px;
+  }
+
+  .relations-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    height: 30px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 7px;
+  }
+
+  .edges {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .edge {
+    display: grid;
+    grid-template-columns: auto auto auto auto minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+    font-size: 10px;
+  }
+
+  .edge:last-child {
+    border-bottom: 0;
+  }
+
+  .edge .name {
+    color: var(--text);
+  }
+
+  .edge .kind {
+    padding: 1px 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-size: 8.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .edge .arrow {
+    color: var(--accent);
+  }
+
+  .edge .detail {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 9px;
+  }
+
+  .graph-warnings {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 9px;
   }
 
   .footnote {

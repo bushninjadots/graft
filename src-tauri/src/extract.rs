@@ -193,6 +193,8 @@ pub struct ExtractPlan {
     pub requires_backup: bool,
     pub backup_path: Option<String>,
     pub history_prefix: Option<String>,
+    pub engine: String,
+    pub branch: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -201,6 +203,8 @@ pub struct ExtractResult {
     pub ok: bool,
     pub strategy: String,
     pub target: String,
+    pub engine: String,
+    pub branch: Option<String>,
     pub file_count: usize,
     pub total_bytes: u64,
     pub backup_path: Option<String>,
@@ -389,10 +393,19 @@ pub fn extract_plan(
     strategy: String,
     target: String,
     name: String,
+    engine: Option<String>,
 ) -> Result<ExtractPlan, String> {
     let backup_root = backup_root(&app)?;
     let graph = build_graph(&source)?;
-    plan_for_graph(&graph, &backup_root, &selection, &strategy, &target, &name)
+    plan_for_graph(
+        &graph,
+        &backup_root,
+        &selection,
+        &strategy,
+        &target,
+        &name,
+        engine.as_deref().unwrap_or("subtree"),
+    )
 }
 
 #[tauri::command]
@@ -404,6 +417,7 @@ pub fn extract_execute(
     strategy: String,
     target: String,
     name: String,
+    engine: Option<String>,
     confirmed: bool,
 ) -> Result<ExtractResult, String> {
     let backup_root = backup_root(&app)?;
@@ -415,6 +429,7 @@ pub fn extract_execute(
         &strategy,
         &target,
         &name,
+        engine.as_deref().unwrap_or("subtree"),
         confirmed,
     )
 }
@@ -1726,8 +1741,37 @@ fn strategy_id(raw: &str) -> Result<&'static str, String> {
         "copy" => Ok("copy"),
         "move" => Ok("move"),
         "history" => Ok("history"),
+        "branch" => Ok("branch"),
+        "fork" => Ok("fork"),
         other => Err(format!("Unknown extraction strategy: {other}")),
     }
+}
+
+fn engine_id(raw: &str) -> Result<&'static str, String> {
+    match raw.trim() {
+        "" | "subtree" => Ok("subtree"),
+        "filter-repo" => Ok("filter-repo"),
+        other => Err(format!("Unknown history engine: {other}")),
+    }
+}
+
+fn filter_repo_available() -> bool {
+    Command::new("git")
+        .args(["filter-repo", "--version"])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn branch_exists(root: &Path, name: &str) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["show-ref", "--verify", "--quiet"])
+        .arg(format!("refs/heads/{name}"))
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 fn bytes_human(bytes: u64) -> String {
@@ -1890,15 +1934,38 @@ fn plan_for_graph(
     strategy_raw: &str,
     target_raw: &str,
     name_raw: &str,
+    engine_raw: &str,
 ) -> Result<ExtractPlan, String> {
     let strategy = strategy_id(strategy_raw)?;
+    let engine = if strategy == "branch" {
+        "subtree"
+    } else {
+        engine_id(engine_raw)?
+    };
     let analysis = analyze_graph(graph, selection)?;
     let selected = expand_selection(&graph.files, selection)?;
-    let target = validate_target(&graph.root, target_raw)?;
-    let name = sanitize_name(name_raw, &target);
-    let target_display = target.to_string_lossy().to_string();
+    let (target, target_display, branch) = if strategy == "branch" {
+        let branch = sanitize_name(name_raw, Path::new("graft-extract"));
+        (
+            PathBuf::from(&branch),
+            format!("branch:{branch}"),
+            Some(branch),
+        )
+    } else {
+        let target = validate_target(&graph.root, target_raw)?;
+        let display = target.to_string_lossy().to_string();
+        (target, display, None)
+    };
+    let name = branch
+        .clone()
+        .unwrap_or_else(|| sanitize_name(name_raw, &target));
 
-    let target_check = if !target.exists() {
+    let target_check = if strategy == "branch" {
+        (
+            true,
+            "A local branch is created in the source; no destination folder is used.".to_string(),
+        )
+    } else if !target.exists() {
         (true, "Destination is new.".to_string())
     } else if !target.is_dir() {
         (
@@ -1927,7 +1994,8 @@ fn plan_for_graph(
             .as_ref()
             .map(|toplevel| toplevel == &graph.root)
             .unwrap_or(false);
-    let history_prefix = if strategy == "history" {
+    let git_mode = matches!(strategy, "history" | "fork" | "branch");
+    let history_prefix = if git_mode {
         Some(common_dir(&selected)).filter(|prefix| !prefix.is_empty())
     } else {
         None
@@ -1963,14 +2031,18 @@ fn plan_for_graph(
     ));
     checks.push(check(
         "target",
-        "Destination is new or empty",
+        if strategy == "branch" {
+            "Branch destination"
+        } else {
+            "Destination is new or empty"
+        },
         target_check.0,
         target_check.1,
     ));
-    if strategy == "history" {
+    if git_mode {
         checks.push(check(
             "git",
-            "History source",
+            "Git source",
             is_repo_root,
             if is_repo_root {
                 format!(
@@ -1980,7 +2052,7 @@ fn plan_for_graph(
             } else if graph.is_git {
                 "Open the repository root, not a folder inside a larger repository.".to_string()
             } else {
-                "History extraction requires a Git repository at the source.".to_string()
+                "This strategy requires a Git repository at the source.".to_string()
             },
         ));
         checks.push(check(
@@ -1989,12 +2061,47 @@ fn plan_for_graph(
             history_prefix.is_some(),
             history_prefix
                 .as_ref()
-                .map(|prefix| format!("History will be split from {prefix}/."))
+                .map(|prefix| format!("Git history will be split from {prefix}/."))
                 .unwrap_or_else(|| {
-                    "The selection has no shared directory; select one folder for history."
-                        .to_string()
+                    "The selection has no shared directory; select one folder.".to_string()
                 }),
         ));
+    }
+    if matches!(strategy, "history" | "fork") {
+        let available = filter_repo_available();
+        checks.push(check(
+            "engine",
+            "History engine",
+            engine != "filter-repo" || available,
+            if engine == "filter-repo" {
+                if available {
+                    "git filter-repo will rewrite the cloned history.".to_string()
+                } else {
+                    "git filter-repo is not installed. Install it or use the subtree engine."
+                        .to_string()
+                }
+            } else {
+                "git subtree will split the cloned history.".to_string()
+            },
+        ));
+    }
+    if strategy == "branch" {
+        if let Some(branch) = &branch {
+            let valid = crate::git::valid_branch_name(branch);
+            let free = valid && !branch_exists(&graph.root, branch);
+            checks.push(check(
+                "branch",
+                "Local branch is available",
+                free,
+                if !valid {
+                    format!("{branch} is not a valid Git branch name.")
+                } else if !free {
+                    format!("Branch {branch} already exists in the source repository.")
+                } else {
+                    format!("Creates {branch} in the source without changing the working tree.")
+                },
+            ));
+        }
     }
 
     let mut warnings = Vec::new();
@@ -2040,7 +2147,7 @@ fn plan_for_graph(
                 .to_string(),
         );
     }
-    if strategy == "history" {
+    if git_mode {
         if graph.dirty {
             warnings.push(
                 "The repository has uncommitted changes; only committed history is split."
@@ -2060,6 +2167,17 @@ fn plan_for_graph(
                 ));
             }
         }
+        if strategy == "branch" {
+            warnings.push(
+                "This creates a local branch in the source repository and leaves every file in place."
+                    .to_string(),
+            );
+        }
+        if strategy == "fork" {
+            warnings.push(
+                "The source repository is kept as the upstream remote in the new fork.".to_string(),
+            );
+        }
     }
     if analysis.file_count > 300 {
         warnings.push(format!(
@@ -2072,19 +2190,21 @@ fn plan_for_graph(
     }
 
     let mut actions = Vec::new();
-    for rel in selected.iter().take(MAX_ACTIONS) {
-        actions.push(ExtractAction {
-            kind: "write".to_string(),
-            path: rel.clone(),
-            detail: format!("{rel} → {target_display}/{rel}"),
-        });
-    }
-    if selected.len() > MAX_ACTIONS {
-        actions.push(ExtractAction {
-            kind: "note".to_string(),
-            path: String::new(),
-            detail: format!("… and {} more files", selected.len() - MAX_ACTIONS),
-        });
+    if strategy != "branch" {
+        for rel in selected.iter().take(MAX_ACTIONS) {
+            actions.push(ExtractAction {
+                kind: "write".to_string(),
+                path: rel.clone(),
+                detail: format!("{rel} → {target_display}/{rel}"),
+            });
+        }
+        if selected.len() > MAX_ACTIONS {
+            actions.push(ExtractAction {
+                kind: "note".to_string(),
+                path: String::new(),
+                detail: format!("… and {} more files", selected.len() - MAX_ACTIONS),
+            });
+        }
     }
     match strategy {
         "move" => {
@@ -2113,7 +2233,34 @@ fn plan_for_graph(
             actions.push(ExtractAction {
                 kind: "git".to_string(),
                 path: history_prefix.clone().unwrap_or_default(),
-                detail: "Clone the repository, then git subtree split the component directory so its commits survive.".to_string(),
+                detail: history_detail(engine, false),
+            });
+        }
+        "fork" => {
+            actions.push(ExtractAction {
+                kind: "git".to_string(),
+                path: history_prefix.clone().unwrap_or_default(),
+                detail: history_detail(engine, true),
+            });
+            actions.push(ExtractAction {
+                kind: "remote".to_string(),
+                path: "upstream".to_string(),
+                detail: "Keep the source repository as the upstream remote.".to_string(),
+            });
+        }
+        "branch" => {
+            actions.push(ExtractAction {
+                kind: "branch".to_string(),
+                path: name.clone(),
+                detail: format!(
+                    "Create local branch {name} in the source from {}/ with git subtree split.",
+                    history_prefix.as_deref().unwrap_or("")
+                ),
+            });
+            actions.push(ExtractAction {
+                kind: "note".to_string(),
+                path: String::new(),
+                detail: "No files are copied, moved or removed.".to_string(),
             });
         }
         _ => {}
@@ -2133,7 +2280,22 @@ fn plan_for_graph(
         requires_backup: strategy == "move",
         backup_path: backup_path.map(|path| path.to_string_lossy().to_string()),
         history_prefix,
+        engine: engine.to_string(),
+        branch,
     })
+}
+
+fn history_detail(engine: &str, fork: bool) -> String {
+    let split = if engine == "filter-repo" {
+        "Clone the repository, then rewrite it with git filter-repo --subdirectory-filter so its commits survive."
+    } else {
+        "Clone the repository, then git subtree split the component directory so its commits survive."
+    };
+    if fork {
+        format!("{split} The result stays linked to the source as upstream.")
+    } else {
+        split.to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2204,7 +2366,13 @@ fn remove_selection(root: &Path, files: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn run_git_history(root: &Path, target: &Path, prefix: &str) -> Result<(), String> {
+fn run_git_split(
+    root: &Path,
+    target: &Path,
+    prefix: &str,
+    engine: &str,
+    keep_upstream: bool,
+) -> Result<(), String> {
     if target.exists() {
         return Err("Destination already exists.".to_string());
     }
@@ -2219,46 +2387,71 @@ fn run_git_history(root: &Path, target: &Path, prefix: &str) -> Result<(), Strin
         return Err(format!("git clone failed: {message}"));
     }
 
-    let split = Command::new("git")
-        .arg("-C")
-        .arg(target)
-        .args([
-            "subtree",
-            "split",
-            "--prefix",
-            prefix,
-            "-b",
-            "graft-extract",
-        ])
-        .output()
-        .map_err(|e| {
+    if engine == "filter-repo" {
+        if !filter_repo_available() {
             let _ = fs::remove_dir_all(target);
-            format!("Cannot run git subtree: {e}")
-        })?;
-    if !split.status.success() {
-        let message = String::from_utf8_lossy(&split.stderr).trim().to_string();
-        let _ = fs::remove_dir_all(target);
-        if message.contains("not a git command") {
             return Err(
-                "git subtree is not installed. Install it or use Copy or Move instead.".to_string(),
+                "git filter-repo is not installed. Install it or choose the subtree engine."
+                    .to_string(),
             );
         }
-        return Err(format!("git subtree split failed: {message}"));
-    }
-
-    let checkout = Command::new("git")
-        .arg("-C")
-        .arg(target)
-        .args(["checkout", "graft-extract"])
-        .output()
-        .map_err(|e| {
+        let filter = Command::new("git")
+            .arg("-C")
+            .arg(target)
+            .args(["filter-repo", "--subdirectory-filter", prefix, "--force"])
+            .output()
+            .map_err(|e| {
+                let _ = fs::remove_dir_all(target);
+                format!("Cannot run git filter-repo: {e}")
+            })?;
+        if !filter.status.success() {
+            let message = String::from_utf8_lossy(&filter.stderr).trim().to_string();
             let _ = fs::remove_dir_all(target);
-            format!("Cannot check out the split history: {e}")
-        })?;
-    if !checkout.status.success() {
-        let message = String::from_utf8_lossy(&checkout.stderr).trim().to_string();
-        let _ = fs::remove_dir_all(target);
-        return Err(format!("Cannot check out the split history: {message}"));
+            return Err(format!("git filter-repo failed: {message}"));
+        }
+    } else {
+        let split = Command::new("git")
+            .arg("-C")
+            .arg(target)
+            .args([
+                "subtree",
+                "split",
+                "--prefix",
+                prefix,
+                "-b",
+                "graft-extract",
+            ])
+            .output()
+            .map_err(|e| {
+                let _ = fs::remove_dir_all(target);
+                format!("Cannot run git subtree: {e}")
+            })?;
+        if !split.status.success() {
+            let message = String::from_utf8_lossy(&split.stderr).trim().to_string();
+            let _ = fs::remove_dir_all(target);
+            if message.contains("not a git command") {
+                return Err(
+                    "git subtree is not installed. Install it or use Copy or Move instead."
+                        .to_string(),
+                );
+            }
+            return Err(format!("git subtree split failed: {message}"));
+        }
+
+        let checkout = Command::new("git")
+            .arg("-C")
+            .arg(target)
+            .args(["checkout", "graft-extract"])
+            .output()
+            .map_err(|e| {
+                let _ = fs::remove_dir_all(target);
+                format!("Cannot check out the split history: {e}")
+            })?;
+        if !checkout.status.success() {
+            let message = String::from_utf8_lossy(&checkout.stderr).trim().to_string();
+            let _ = fs::remove_dir_all(target);
+            return Err(format!("Cannot check out the split history: {message}"));
+        }
     }
 
     let _ = Command::new("git")
@@ -2266,7 +2459,38 @@ fn run_git_history(root: &Path, target: &Path, prefix: &str) -> Result<(), Strin
         .arg(target)
         .args(["remote", "remove", "origin"])
         .output();
+    if keep_upstream {
+        let _ = Command::new("git")
+            .arg("-C")
+            .arg(target)
+            .args(["remote", "remove", "upstream"])
+            .output();
+        let add = Command::new("git")
+            .arg("-C")
+            .arg(target)
+            .args(["remote", "add", "upstream"])
+            .arg(root)
+            .output()
+            .map_err(|e| {
+                let _ = fs::remove_dir_all(target);
+                format!("Cannot create the upstream remote: {e}")
+            })?;
+        if !add.status.success() {
+            let message = String::from_utf8_lossy(&add.stderr).trim().to_string();
+            let _ = fs::remove_dir_all(target);
+            return Err(format!("Cannot create the upstream remote: {message}"));
+        }
+    }
 
+    let current = Command::new("git")
+        .arg("-C")
+        .arg(target)
+        .args(["symbolic-ref", "--short", "HEAD"])
+        .output()
+        .ok()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "graft-extract".to_string());
     if let Ok(branches) = Command::new("git")
         .arg("-C")
         .arg(target)
@@ -2275,7 +2499,7 @@ fn run_git_history(root: &Path, target: &Path, prefix: &str) -> Result<(), Strin
     {
         for branch in String::from_utf8_lossy(&branches.stdout).lines() {
             let branch = branch.trim();
-            if !branch.is_empty() && branch != "graft-extract" {
+            if !branch.is_empty() && branch != current {
                 let _ = Command::new("git")
                     .arg("-C")
                     .arg(target)
@@ -2284,11 +2508,46 @@ fn run_git_history(root: &Path, target: &Path, prefix: &str) -> Result<(), Strin
             }
         }
     }
-    let _ = Command::new("git")
+    let rename = Command::new("git")
         .arg("-C")
         .arg(target)
-        .args(["branch", "-m", "graft-extract", "main"])
-        .output();
+        .args(["branch", "-M", "main"])
+        .output()
+        .map_err(|e| {
+            let _ = fs::remove_dir_all(target);
+            format!("Cannot name the extracted branch: {e}")
+        })?;
+    if !rename.status.success() {
+        let message = String::from_utf8_lossy(&rename.stderr).trim().to_string();
+        let _ = fs::remove_dir_all(target);
+        return Err(format!("Cannot name the extracted branch: {message}"));
+    }
+    Ok(())
+}
+
+fn run_git_branch(root: &Path, prefix: &str, name: &str) -> Result<(), String> {
+    if !crate::git::valid_branch_name(name) {
+        return Err(format!("{name} is not a valid Git branch name."));
+    }
+    if branch_exists(root, name) {
+        return Err(format!("Branch {name} already exists in the source repository."));
+    }
+    let split = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["subtree", "split", "--prefix", prefix, "-b", name])
+        .output()
+        .map_err(|e| format!("Cannot run git subtree: {e}"))?;
+    if !split.status.success() {
+        let message = String::from_utf8_lossy(&split.stderr).trim().to_string();
+        if message.contains("not a git command") {
+            return Err("git subtree is not installed, so a local branch cannot be split.".to_string());
+        }
+        return Err(format!("git subtree split failed: {message}"));
+    }
+    if !branch_exists(root, name) {
+        return Err(format!("git subtree reported success but branch {name} is missing."));
+    }
     Ok(())
 }
 
@@ -2360,7 +2619,7 @@ fn validate_written(root: &Path, target: &Path, plan: &ExtractPlan) -> Vec<Extra
                 ),
             ]
         }
-        "history" => {
+        "history" | "fork" => {
             let prefix = plan.history_prefix.as_deref().unwrap_or("");
             let mut missing = 0usize;
             for rel in &plan.selection {
@@ -2393,6 +2652,66 @@ fn validate_written(root: &Path, target: &Path, plan: &ExtractPlan) -> Vec<Extra
                     } else {
                         "The destination has no Git history.".to_string()
                     },
+                ),
+            ]
+        }
+        "branch" => {
+            let name = plan.branch.as_deref().unwrap_or("");
+            let prefix = plan.history_prefix.as_deref().unwrap_or("");
+            let exists = !name.is_empty() && branch_exists(root, name);
+            let listed: HashSet<String> = if exists {
+                Command::new("git")
+                    .arg("-C")
+                    .arg(root)
+                    .args(["ls-tree", "-r", "--name-only", name])
+                    .output()
+                    .ok()
+                    .map(|output| {
+                        String::from_utf8_lossy(&output.stdout)
+                            .lines()
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                HashSet::new()
+            };
+            let mut missing = 0usize;
+            for rel in &plan.selection {
+                let relative = rel
+                    .strip_prefix(prefix)
+                    .unwrap_or(rel)
+                    .trim_start_matches('/');
+                if !listed.contains(relative) {
+                    missing += 1;
+                }
+            }
+            vec![
+                check(
+                    "branch-created",
+                    "Local branch created",
+                    exists,
+                    if exists {
+                        format!("Branch {name} exists in the source repository.")
+                    } else {
+                        format!("Branch {name} is missing.")
+                    },
+                ),
+                check(
+                    "branch-files",
+                    "Branch contains the selection",
+                    missing == 0,
+                    if missing == 0 {
+                        format!("{} files verified on {name}", plan.selection.len())
+                    } else {
+                        format!("{missing} files are missing from the branch.")
+                    },
+                ),
+                check(
+                    "source-intact",
+                    "Source working tree untouched",
+                    true,
+                    "Branch creation does not change files on disk.".to_string(),
                 ),
             ]
         }
@@ -2460,6 +2779,7 @@ fn execute_with(
     strategy: &str,
     target_raw: &str,
     name_raw: &str,
+    engine_raw: &str,
     confirmed: bool,
 ) -> Result<ExtractResult, String> {
     if !confirmed {
@@ -2473,6 +2793,7 @@ fn execute_with(
         strategy,
         target_raw,
         name_raw,
+        engine_raw,
     )?;
     if let Some(failed) = plan.checks.iter().find(|check| !check.ok) {
         return Err(format!("Pre-flight check failed: {}", failed.detail));
@@ -2507,11 +2828,27 @@ fn execute_with(
             backup_selection(&graph.root, backup, &plan, &plan.source)?;
             remove_selection(&graph.root, &plan.selection)?;
         }
-        "history" => {
+        "history" | "fork" => {
             let Some(prefix) = plan.history_prefix.as_deref() else {
                 return Err("History extraction needs a shared component directory.".to_string());
             };
-            run_git_history(&graph.root, &target, prefix)?;
+            run_git_split(
+                &graph.root,
+                &target,
+                prefix,
+                &plan.engine,
+                plan.strategy == "fork",
+            )?;
+            total_bytes = plan.total_bytes;
+        }
+        "branch" => {
+            let Some(prefix) = plan.history_prefix.as_deref() else {
+                return Err("Branch extraction needs a shared component directory.".to_string());
+            };
+            let Some(branch) = plan.branch.as_deref() else {
+                return Err("Branch extraction needs a branch name.".to_string());
+            };
+            run_git_branch(&graph.root, prefix, branch)?;
             total_bytes = plan.total_bytes;
         }
         _ => {
@@ -2534,6 +2871,8 @@ fn execute_with(
             ok: false,
             strategy: plan.strategy,
             target: plan.target,
+            engine: plan.engine,
+            branch: plan.branch,
             file_count: plan.file_count,
             total_bytes,
             backup_path: plan.backup_path,
@@ -2552,8 +2891,22 @@ fn execute_with(
             plan.backup_path.as_deref().unwrap_or("—")
         ),
         "history" => format!(
-            "Created an independent Git repository at {} from {}/ with {} files.",
+            "Created an independent Git repository at {} from {}/ with {} files using the {} engine.",
             plan.target,
+            plan.history_prefix.as_deref().unwrap_or(""),
+            plan.file_count,
+            plan.engine
+        ),
+        "fork" => format!(
+            "Created a forked Git repository at {} from {}/ with {} files. The source is kept as upstream.",
+            plan.target,
+            plan.history_prefix.as_deref().unwrap_or(""),
+            plan.file_count
+        ),
+        "branch" => format!(
+            "Created branch {} in {} from {}/ with {} files. The working tree was not changed.",
+            plan.name,
+            plan.source,
             plan.history_prefix.as_deref().unwrap_or(""),
             plan.file_count
         ),
@@ -2570,6 +2923,8 @@ fn execute_with(
         ok: true,
         strategy: plan.strategy,
         target: plan.target,
+        engine: plan.engine,
+        branch: plan.branch,
         file_count: plan.file_count,
         total_bytes,
         backup_path: plan.backup_path,
@@ -2630,6 +2985,30 @@ mod tests {
         root
     }
 
+    fn git_repo(label: &str) -> Option<PathBuf> {
+        let root = temp_path(label);
+        write(&root, "src/a.txt", "hello\n");
+        write(&root, "src/b.txt", "world\n");
+        let init = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .arg("init")
+            .output();
+        if init.map(|output| !output.status.success()).unwrap_or(true) {
+            fs::remove_dir_all(root).unwrap();
+            return None;
+        }
+        for args in [
+            vec!["config", "user.email", "test@example.com"],
+            vec!["config", "user.name", "Test"],
+            vec!["add", "."],
+            vec!["commit", "-m", "initial"],
+        ] {
+            let _ = Command::new("git").arg("-C").arg(&root).args(args).output();
+        }
+        Some(root)
+    }
+
     #[test]
     fn scans_files_languages_and_markers() {
         let root = sample_repo("scan");
@@ -2683,6 +3062,7 @@ mod tests {
             "copy",
             &inside,
             "demo",
+            "subtree",
         )
         .is_err());
         assert!(plan_for_graph(
@@ -2692,6 +3072,7 @@ mod tests {
             "copy",
             &inside,
             "demo",
+            "subtree",
         )
         .is_err());
 
@@ -2705,6 +3086,7 @@ mod tests {
             "copy",
             &outside,
             "demo",
+            "subtree",
         )
         .unwrap();
         assert_eq!(plan.file_count, 3);
@@ -2728,20 +3110,21 @@ mod tests {
                 "copy".to_string(),
                 target.to_string_lossy().to_string(),
                 "src".to_string(),
+                "subtree".to_string(),
                 confirmed,
             )
         };
 
-        let (source, selection, strategy, dest, name, confirmed) = args(false);
+        let (source, selection, strategy, dest, name, engine, confirmed) = args(false);
         let err = execute_with(
-            &db, &backups, &source, &selection, &strategy, &dest, &name, confirmed,
+            &db, &backups, &source, &selection, &strategy, &dest, &name, &engine, confirmed,
         );
         assert!(err.is_err());
         assert!(!target.exists());
 
-        let (source, selection, strategy, dest, name, confirmed) = args(true);
+        let (source, selection, strategy, dest, name, engine, confirmed) = args(true);
         let result = execute_with(
-            &db, &backups, &source, &selection, &strategy, &dest, &name, confirmed,
+            &db, &backups, &source, &selection, &strategy, &dest, &name, &engine, confirmed,
         )
         .unwrap();
         assert!(result.ok);
@@ -2775,6 +3158,7 @@ mod tests {
             "move",
             &target.to_string_lossy(),
             "web",
+            "subtree",
             true,
         )
         .unwrap();
@@ -2825,6 +3209,7 @@ mod tests {
             "history",
             &target.to_string_lossy(),
             "component",
+            "subtree",
             true,
         )
         .unwrap();
@@ -2841,5 +3226,89 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(backups).unwrap();
         fs::remove_dir_all(target).unwrap();
+    }
+
+    #[test]
+    fn branch_split_creates_a_local_branch_without_writing_files() {
+        let Some(root) = git_repo("branch") else {
+            return;
+        };
+        let backups = temp_path("branch-backups");
+        let db = Db::open(&root.join("audit.db")).unwrap();
+        let result = execute_with(
+            &db,
+            &backups,
+            &root.to_string_lossy(),
+            &["src".to_string()],
+            "branch",
+            "",
+            "component-branch",
+            "subtree",
+            true,
+        )
+        .unwrap();
+        assert!(result.ok, "{}", result.message);
+        assert_eq!(result.target, "branch:component-branch");
+        assert_eq!(result.branch.as_deref(), Some("component-branch"));
+        assert!(root.join("src/a.txt").exists());
+        let tree = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["ls-tree", "-r", "--name-only", "component-branch"])
+            .output()
+            .unwrap();
+        assert!(tree.status.success());
+        assert!(String::from_utf8_lossy(&tree.stdout).contains("a.txt"));
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(backups).unwrap();
+    }
+
+    #[test]
+    fn fork_keeps_the_source_as_upstream() {
+        let Some(root) = git_repo("fork") else {
+            return;
+        };
+        let backups = temp_path("fork-backups");
+        let target = temp_path("fork-target");
+        fs::remove_dir_all(&target).unwrap();
+        let db = Db::open(&root.join("audit.db")).unwrap();
+        let result = execute_with(
+            &db,
+            &backups,
+            &root.to_string_lossy(),
+            &["src".to_string()],
+            "fork",
+            &target.to_string_lossy(),
+            "component",
+            "subtree",
+            true,
+        )
+        .unwrap();
+        assert!(result.ok, "{}", result.message);
+        assert!(target.join("a.txt").exists());
+        assert!(target.join(".git").exists());
+        let remote = Command::new("git")
+            .arg("-C")
+            .arg(&target)
+            .args(["remote", "get-url", "upstream"])
+            .output()
+            .unwrap();
+        assert!(remote.status.success());
+        let url = String::from_utf8_lossy(&remote.stdout).trim().to_string();
+        assert_eq!(
+            fs::canonicalize(url).unwrap(),
+            fs::canonicalize(&root).unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(backups).unwrap();
+        fs::remove_dir_all(target).unwrap();
+    }
+
+    #[test]
+    fn recognizes_history_engines() {
+        assert_eq!(engine_id("").unwrap(), "subtree");
+        assert_eq!(engine_id("subtree").unwrap(), "subtree");
+        assert_eq!(engine_id("filter-repo").unwrap(), "filter-repo");
+        assert!(engine_id("unknown").is_err());
     }
 }

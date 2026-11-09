@@ -7,11 +7,11 @@ review, monitoring, extraction and developer tooling in one lightweight applicat
 It is a native desktop instrument (Tauri 2 + Rust + Svelte 5), not a website in a
 window.
 
-> Status: **Phase 1–3 complete**. Real OAuth device-flow sign-in with the token kept in
+> Status: **Phase 1–4 complete**. Real OAuth device-flow sign-in with the token kept in
 > the system keyring, a live repository list, an in-app repository workspace (README,
-> code, commits, pull requests, issues, branches), star/fork/clone, editing text files
-> where you have push access, and Git actions for local projects. A real PTY terminal
-> runs fish, bash or zsh in project directories. Reviewers can use unified or
+> code, commits, pull requests, issues, branches, releases), star/fork/clone, editing
+> text files where you have push access, and Git actions for local projects. A real PTY
+> terminal runs fish, bash or zsh in project directories. Reviewers can use unified or
 > side-by-side diffs, approve, request changes and leave inline comments after an
 > explicit confirmation. Profile Studio builds and publishes the profile README.
 > Explore searches public GitHub and saves queries; Collections keeps a local library
@@ -19,9 +19,11 @@ window.
 > requests, stores alert history in SQLite, sends native notifications when the window
 > is hidden and runs background monitoring only when opted in. Extract Studio scans a
 > repository read-only, maps imports across Rust, TypeScript/JavaScript, Svelte,
-> Python, Go, C/C++ and shell, and produces a checked plan for copy, move or
-> history-split extraction. AI and plugins remain scheduled phases and render explicit
-> planned modules — never fake data. See [`docs/PLAN.md`](docs/PLAN.md).
+> Python, Go, C/C++ and shell, and produces a checked plan for copy, move, history,
+> branch or fork extraction. A project relationship panel links local projects by
+> shared remote, package dependency and extraction history, and the status bar shows
+> the live GitHub rate limit. AI and plugins remain scheduled phases and render
+> explicit planned modules — never fake data. See [`docs/PLAN.md`](docs/PLAN.md).
 
 ![GRAFT repository workspace](docs/screenshots/repository.png)
 
@@ -44,23 +46,30 @@ window.
   project directory and fish, bash or zsh; tabs stay alive while navigating GRAFT.
 - **Repository workspace**: README, directory tree, file text, branches, commit
   history with a lane-based branch graph, pull requests with unified or side-by-side
-  diffs, inline review comments, approvals, change requests, and issues — read and
-  reviewed inside GRAFT instead of a browser tab.
+  diffs, inline review comments, approvals, change requests, issues and releases —
+  read and reviewed inside GRAFT instead of a browser tab.
 - **Editing**: text files can be edited and committed from the Code tab when the
   GitHub API reports push access. The commit is a two-step confirmation with the
   branch, path and message visible before anything is written.
 - **Actions**: star/unstar, fork, create issues, and clone/download through the Git
   CLI, with an add-to-projects step after cloning. Linked projects can fetch, pull
   and push, and stage-all, commit and create or switch branches with a confirmation
-  step.
+  step. Published releases are visible in a dedicated repository tab, and the status
+  bar shows the live GitHub core, search and GraphQL rate-limit windows.
 - **Extract Studio**: point it at a repository to scan languages, manifests and the
   Git branch without following symlinks or descending into caches. Analyze a folder
   or file selection for internal references, incoming coupling, external packages and
   cohesion, then build a pre-flight plan. Copy leaves the source untouched, move
-  verifies and backs up before removing originals, and history uses `git subtree
-  split` so component commits survive. Destructive strategies require a second
-  confirmation and every successful run is recorded locally. Those runs also draw a
-  source → component relationship graph, built only from the local run log.
+  verifies and backs up before removing originals, history splits the component into
+  its own Git repository, branch creates a local branch without changing files, and
+  fork keeps the source as `upstream`. History and fork can use `git subtree` or
+  `git filter-repo`. Destructive strategies require a second confirmation and every
+  successful run is recorded locally. Those runs also draw a source → component
+  relationship graph, built only from the local run log.
+- **Project relationships**: a panel in Projects reads local manifests
+  (package.json, Cargo.toml, pyproject.toml, go.mod, composer.json) and Git remotes to
+  link projects by shared remote, package dependency and extraction history. Nothing
+  is inferred beyond local files.
 - **Notifications**: a persistent bell keeps pushes, pulls, checkouts, commits, file
   edits, forks and issues, and imports unread GitHub notifications from the website
   (mentions, reviews, issues, pull requests, workflow activity). Each item stays until

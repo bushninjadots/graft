@@ -3,6 +3,7 @@ import {
   type GithubAuthStatus,
   type GithubRepo,
   type GithubUser,
+  type RateLimits,
 } from "../api";
 import { navigate, notify, ui } from "./ui.svelte";
 
@@ -23,6 +24,9 @@ type GithubState = {
   scope: RepoScope;
   syncing: boolean;
   syncedAt: number | null;
+  rate: RateLimits | null;
+  rateAt: number;
+  rateLoading: boolean;
   discover: {
     query: string;
     language: string;
@@ -53,6 +57,9 @@ export const github = $state<GithubState>({
   scope: "mine",
   syncing: false,
   syncedAt: null,
+  rate: null,
+  rateAt: 0,
+  rateLoading: false,
   discover: {
     query: "",
     language: "",
@@ -128,10 +135,27 @@ export async function loadGithub(): Promise<void> {
   try {
     github.status = await api.githubStatus();
     github.error = null;
+    if (github.status.signedIn) void loadRateLimit();
+    else github.rate = null;
   } catch (cause) {
     github.error = message(cause);
   } finally {
     github.loading = false;
+  }
+}
+
+/** Reads the live API quota; the endpoint itself does not consume quota. */
+export async function loadRateLimit(force = false): Promise<void> {
+  if (!isSignedIn() || github.rateLoading) return;
+  if (!force && github.rateAt && Date.now() - github.rateAt < 60_000) return;
+  github.rateLoading = true;
+  try {
+    github.rate = await api.githubRateLimit();
+    github.rateAt = Date.now();
+  } catch {
+    // Quota is diagnostic; failures stay out of the notification stream.
+  } finally {
+    github.rateLoading = false;
   }
 }
 
@@ -154,6 +178,8 @@ export async function signOut(): Promise<void> {
     github.hasMore = false;
     github.selected = null;
     github.syncedAt = null;
+    github.rate = null;
+    github.rateAt = 0;
     github.discover.results = [];
     github.discover.totalCount = 0;
     github.discover.searched = false;

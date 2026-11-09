@@ -9,7 +9,8 @@ import {
 } from "../api";
 import { notify } from "./ui.svelte";
 
-export type ExtractStrategy = "copy" | "move" | "history";
+export type ExtractStrategy = "copy" | "move" | "history" | "branch" | "fork";
+export type ExtractEngine = "subtree" | "filter-repo";
 
 type ExtractState = {
   source: string;
@@ -21,6 +22,7 @@ type ExtractState = {
   runs: ExtractionRun[];
   selection: string[];
   strategy: ExtractStrategy;
+  engine: ExtractEngine;
   target: string;
   name: string;
   scanning: boolean;
@@ -42,6 +44,7 @@ export const extract = $state<ExtractState>({
   runs: [],
   selection: [],
   strategy: "copy",
+  engine: "subtree",
   target: "",
   name: "",
   scanning: false,
@@ -177,10 +180,24 @@ export function setStrategy(strategy: ExtractStrategy): void {
   extract.result = null;
 }
 
+export function setEngine(engine: ExtractEngine): void {
+  extract.engine = engine;
+  invalidatePlan();
+}
+
+export function isGitStrategy(): boolean {
+  return (
+    extract.strategy === "history" ||
+    extract.strategy === "branch" ||
+    extract.strategy === "fork"
+  );
+}
+
 export function planInputsValid(): boolean {
+  const needsTarget = extract.strategy !== "branch";
   return (
     extract.selection.length > 0 &&
-    extract.target.trim().length > 0 &&
+    (!needsTarget || extract.target.trim().length > 0) &&
     extract.name.trim().length > 0
   );
 }
@@ -188,7 +205,10 @@ export function planInputsValid(): boolean {
 export async function buildPlan(): Promise<boolean> {
   if (!extract.scan) return false;
   if (!planInputsValid()) {
-    extract.error = "Choose a selection, a new folder and a project name.";
+    extract.error =
+      extract.strategy === "branch"
+        ? "Choose a selection and a branch name."
+        : "Choose a selection, a new folder and a project name.";
     return false;
   }
   extract.planning = true;
@@ -201,6 +221,7 @@ export async function buildPlan(): Promise<boolean> {
       extract.strategy,
       extract.target.trim(),
       extract.name.trim(),
+      extract.strategy === "branch" ? "subtree" : extract.engine,
     );
     return true;
   } catch (cause) {
@@ -228,16 +249,24 @@ export async function executePlan(): Promise<boolean> {
       plan.strategy,
       plan.target,
       plan.name,
+      plan.engine,
       true,
     );
     extract.result = result;
     extract.plan = null;
     extract.selection = [];
     extract.analysis = null;
-    notify(
-      `${result.strategy === "copy" ? "Copied" : result.strategy === "move" ? "Moved" : "Extracted"} ${result.fileCount} files`,
-      "ok",
-    );
+    const verb =
+      result.strategy === "copy"
+        ? "Copied"
+        : result.strategy === "move"
+          ? "Moved"
+          : result.strategy === "branch"
+            ? "Branched"
+            : result.strategy === "fork"
+              ? "Forked"
+              : "Extracted";
+    notify(`${verb} ${result.fileCount} files`, "ok");
     await Promise.all([refreshSource(), loadRuns()]);
     return true;
   } catch (cause) {

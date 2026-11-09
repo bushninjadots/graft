@@ -116,6 +116,42 @@ pub struct RepoPage {
     pub has_more: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RateLimitWindow {
+    pub limit: u64,
+    pub remaining: u64,
+    pub used: u64,
+    pub reset: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RateLimits {
+    pub core: RateLimitWindow,
+    pub search: RateLimitWindow,
+    pub graphql: Option<RateLimitWindow>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoRelease {
+    pub id: u64,
+    pub tag_name: String,
+    pub name: String,
+    pub draft: bool,
+    pub prerelease: bool,
+    pub published_at: Option<String>,
+    pub created_at: String,
+    pub body: String,
+    pub html_url: String,
+    pub author_login: String,
+    pub author_avatar: String,
+    pub target_commitish: String,
+    pub asset_count: u32,
+    pub download_count: u64,
+}
+
 pub(crate) fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
@@ -277,6 +313,35 @@ pub async fn github_status(db: State<'_, Db>) -> Result<AuthStatus, String> {
             keyring_error: None,
             scopes: None,
         }),
+    }
+}
+
+#[tauri::command]
+pub async fn github_rate_limit() -> Result<RateLimits, String> {
+    let token = token()?;
+    let value = get_json(&token, &format!("{API}/rate_limit")).await?;
+    let resources = value
+        .get("resources")
+        .ok_or_else(|| "GitHub returned an unexpected rate limit response.".to_string())?;
+    Ok(RateLimits {
+        core: rate_window(resources.get("core")),
+        search: rate_window(resources.get("search")),
+        graphql: resources.get("graphql").map(|value| rate_window(Some(value))),
+    })
+}
+
+fn rate_window(value: Option<&serde_json::Value>) -> RateLimitWindow {
+    let number = |key: &str| {
+        value
+            .and_then(|value| value.get(key))
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0)
+    };
+    RateLimitWindow {
+        limit: number("limit"),
+        remaining: number("remaining"),
+        used: number("used"),
+        reset: number("reset"),
     }
 }
 
@@ -1255,6 +1320,69 @@ pub async fn github_repo_issues(
         .filter(|issue| issue.get("pull_request").is_none())
         .map(issue_from_value)
         .collect())
+}
+
+#[tauri::command]
+pub async fn github_repo_releases(owner: String, repo: String) -> Result<Vec<RepoRelease>, String> {
+    let token = token()?;
+    let (owner, repo) = coords(&owner, &repo)?;
+    let value = get_json(
+        &token,
+        &format!("{API}/repos/{owner}/{repo}/releases?per_page=30"),
+    )
+    .await?;
+    let list = value
+        .as_array()
+        .ok_or_else(|| "GitHub returned an unexpected release list.".to_string())?;
+    Ok(list.iter().map(release_from_value).collect())
+}
+
+fn release_from_value(value: &serde_json::Value) -> RepoRelease {
+    let text = |pointer: &str| {
+        value
+            .pointer(pointer)
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    RepoRelease {
+        id: value.get("id").and_then(|v| v.as_u64()).unwrap_or(0),
+        tag_name: text("/tag_name"),
+        name: text("/name"),
+        draft: value
+            .get("draft")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        prerelease: value
+            .get("prerelease")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        published_at: value
+            .get("published_at")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        created_at: text("/created_at"),
+        body: text("/body"),
+        html_url: text("/html_url"),
+        author_login: text("/author/login"),
+        author_avatar: text("/author/avatar_url"),
+        target_commitish: text("/target_commitish"),
+        asset_count: value
+            .get("assets")
+            .and_then(|v| v.as_array())
+            .map(|assets| assets.len() as u32)
+            .unwrap_or(0),
+        download_count: value
+            .get("assets")
+            .and_then(|v| v.as_array())
+            .map(|assets| {
+                assets
+                    .iter()
+                    .filter_map(|asset| asset.get("download_count").and_then(|v| v.as_u64()))
+                    .sum()
+            })
+            .unwrap_or(0),
+    }
 }
 
 #[tauri::command]

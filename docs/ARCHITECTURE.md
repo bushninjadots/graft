@@ -17,7 +17,8 @@
 │  commands.rs   thin command handlers, validation, errors      │
 │  db.rs         SQLite, migrations, queries                    │
 │  tools.rs      environment probing                            │
-│  github.rs     auth, repos, search, reviews, issues            │
+│  github.rs     auth, repos, search, reviews, issues, releases        │
+│  relations.rs  local project graph from manifests + run log        │
 │  profile.rs    live profile snapshot + README renderer        │
 │  watchtower.rs favourites, polling, visits, radar discovery   │
 │  terminal.rs   portable-pty sessions over Tauri channels      │
@@ -105,6 +106,7 @@ Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`
 | `project_git_status` | `path` | `GitStatus` (never fails; errors are reported in the payload) |
 | `open_external` | `url` | `void` — rejects non-http(s) schemes |
 | `github_status` | — | `AuthStatus` (keyring probe, profile refresh, scopes) |
+| `github_rate_limit` | — | `RateLimits` (core, search and GraphQL windows) |
 | `github_set_client_id` | `clientId` | `void` |
 | `github_start_device` | — | `DeviceStart` (code, URI, interval, expiry) |
 | `github_poll_device` | `deviceCode` | `DevicePoll` — `pending`, `slowDown`, `complete`, `failed` |
@@ -128,6 +130,7 @@ Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`
 | `github_submit_pull_review` | `owner, repo, number, event, body` | `RepoPullReview` — confirmed external write |
 | `github_create_pull_comment` | `owner, repo, number, body, commitId, path, line, side` | `RepoPullComment` — confirmed external write |
 | `github_repo_issues` | `owner, repo, state` | `RepoIssue[]` (pull requests excluded) |
+| `github_repo_releases` | `owner, repo` | `RepoRelease[]` (30 most recent, drafts included) |
 | `github_create_issue` | `owner, repo, title, body` | `RepoIssue` |
 | `github_fork` | `owner, repo` | `ForkResult` |
 | `github_set_star` | `owner, repo, starred` | `bool` |
@@ -167,9 +170,10 @@ Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`
 | `extract_scan` | `source` | `ExtractScan` (read-only, skips symlinks and caches) |
 | `extract_suggest` | `source` | `ExtractComponent[]` scored directories |
 | `extract_analyze` | `source, selection` | `ExtractAnalysis` (internal, incoming, outgoing, external) |
-| `extract_plan` | `source, selection, strategy, target, name` | `ExtractPlan` with checks, warnings and actions |
-| `extract_execute` | `source, selection, strategy, target, name, confirmed` | `ExtractResult`; re-validates and records the run |
+| `extract_plan` | `source, selection, strategy, target, name, engine?` | `ExtractPlan` with checks, warnings and actions |
+| `extract_execute` | `source, selection, strategy, target, name, engine?, confirmed` | `ExtractResult`; re-validates and records the run |
 | `extract_runs` | — | `ExtractionRun[]` (recent successful runs) |
+| `project_graph` | — | `ProjectGraph` (projects, manifests, shared remotes, dependencies, extraction edges) |
 
 Serde maps snake_case fields to camelCase for JS. GitHub payloads deserialize from
 the API's snake_case and serialize with `rename_all(serialize = "camelCase")`. Bump this table when adding a

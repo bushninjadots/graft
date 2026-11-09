@@ -26,9 +26,12 @@ editing with push-access checks, issue listing/creation, three repository layout
 live profile status editing with device-flow scope upgrade, and focus/timer sync
 with unread GitHub notification import. Phase 4 adds Extract Studio: a read-only
 repository scanner with language adapters, import-graph analysis, component
-suggestions, pre-flight extraction plans and confirmed copy, move and history-split
-strategies with backups and a recorded run log. Phase 0 is complete and verified as
-well.
+suggestions, pre-flight extraction plans and confirmed copy, move, history-split,
+local-branch and fork strategies with backups, selectable subtree/filter-repo
+engines and a recorded run log. A project-wide relationship panel links local
+projects by shared remote, package dependency and extraction history. Repository
+Releases and a live GitHub rate-limit chip round out the workspace. Phase 0 is
+complete and verified as well.
 
 Delivered in Phase 1a:
 
@@ -48,9 +51,10 @@ Delivered in Phase 1a:
 | 12 | Local project fetch / pull / push | done |
 | 13 | Commit and branch write operations | done (with confirmations) |
 
-Still planned: rate-limit surfacing beyond error messages and releases. ETag caching
-now ships in Watchtower; repository discovery is available both inside Repositories
-and as the standalone Explore surface.
+Rate-limit surfacing now ships as a live core/search/GraphQL chip in the status
+bar, and repository Releases are a first-class tab. ETag caching ships in
+Watchtower; repository discovery is available both inside Repositories and as
+the standalone Explore surface.
 
 ### Verification (Phase 1a)
 
@@ -59,7 +63,7 @@ and as the standalone Explore surface.
 | `svelte-check` | 0 errors, 0 warnings |
 | `vite build` | passes — 330 kB JS / 67 kB CSS (builder, search, sync, notifications and issues included) |
 | `cargo check` | passes |
-| `cargo test` | 30/30 pass (migrations, settings, projects, Git parsing, branch validation, a real commit/branch cycle in a temp repo, device flow, HTTP client, profile publish/write payloads, profile snapshot shape and every README section, issues, file-path validation, search queries, notification mapping, PTY validation, Watchtower parsing/history/visits) |
+| `cargo test` | 43/43 pass (migrations, settings, projects, Git parsing, branch validation, a real commit/branch cycle in a temp repo, device flow, HTTP client, profile publish/write payloads, profile snapshot shape and every README section, issues, project graph, extraction plans/engines/branch/fork, file-path validation, search queries, notification mapping, PTY validation, Watchtower parsing/history/visits) |
 | Repository API | verified live with a real token: repository list, detail, README and branches rendered in the running window; commits and pull requests fetched with no errors |
 | Keyring round-trip | verified against the live Secret Service on this machine |
 | Visual review | running window captured with `grim`; Repositories sign-in flow inspected |
@@ -220,7 +224,7 @@ workspace, with Code Review as the repository chooser.
 
 ---
 
-## Phase 4 — Extract Studio (complete for copy, move and history split)
+## Phase 4 — Extract Studio (complete)
 
 `extract.rs` scans a repository without following symlinks or descending into VCS
 metadata, dependency caches and build output. It records language statistics,
@@ -230,20 +234,27 @@ reports internal edges, incoming and outgoing coupling, external packages, cohes
 and file sizes; suggestions score directories by cohesion, size and manifest
 presence. Every plan re-validates the selection and target, refuses traversal and
 nested or non-empty destinations, and lists its checks, warnings, writes, backup and
-history prefix before anything happens.
+component directory before anything happens.
 
-Three strategies ship: **copy** writes a verified duplicate and leaves the source
+Five strategies ship: **copy** writes a verified duplicate and leaves the source
 untouched; **move** copies, verifies, writes a full backup under the app data
-directory, then removes the originals; **history** clones the repository and uses
-`git subtree split --prefix` so the component directory's commits become an
-independent repository. Destructive strategies require a second confirmation. The
-Rust side rebuilds and re-checks the plan inside execute, and successful runs are
-recorded in `extraction_runs`. A relationship graph in the view draws those recorded
-runs as source repository → extracted component links; it reads only the local run
-log and invents no nodes.
+directory, then removes the originals; **history** clones the repository and splits
+the component directory into an independent repository; **branch** creates a local
+branch in the source with `git subtree split`, changing no files; **fork** clones
+the component with its history and keeps the source as the `upstream` remote.
+History and fork choose between the bundled **subtree** engine and **filter-repo**
+(`git filter-repo --subdirectory-filter`), with an install check before any write.
+Destructive strategies require a second confirmation, and branch is confirmed too.
+The Rust side rebuilds and re-checks the plan inside execute, and successful runs
+are recorded in `extraction_runs`.
 
-Still to add: `git filter-repo` as an alternative history engine, fork/branch
-strategies and project-wide relationships beyond extraction runs.
+`relations.rs` builds a project-wide graph from local data only: each project's
+manifest (package.json, Cargo.toml, pyproject.toml, go.mod, composer.json) supplies
+its package name and dependencies, while `git::status` supplies its remote. Edges
+are `shared-remote`, `depends-on` and `extracted` (from completed runs); branch runs
+are excluded because they have no target project. Undefined or unreadable paths
+become graph warnings rather than fabricated nodes. A relationship graph in Extract
+Studio still draws recorded source → component runs.
 
 ---
 

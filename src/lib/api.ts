@@ -424,6 +424,59 @@ export type RepoIssue = {
   htmlUrl: string;
 };
 
+export type RateLimitWindow = {
+  limit: number;
+  remaining: number;
+  used: number;
+  reset: number;
+};
+
+export type RateLimits = {
+  core: RateLimitWindow;
+  search: RateLimitWindow;
+  graphql: RateLimitWindow | null;
+};
+
+export type RepoRelease = {
+  id: number;
+  tagName: string;
+  name: string;
+  draft: boolean;
+  prerelease: boolean;
+  publishedAt: string | null;
+  createdAt: string;
+  body: string;
+  htmlUrl: string;
+  authorLogin: string;
+  authorAvatar: string;
+  targetCommitish: string;
+  assetCount: number;
+  downloadCount: number;
+};
+
+export type ProjectNode = {
+  id: number;
+  name: string;
+  path: string;
+  package: string | null;
+  remote: string | null;
+  github: string | null;
+  dependencies: string[];
+};
+
+export type ProjectEdge = {
+  source: number;
+  target: number;
+  kind: string;
+  label: string;
+};
+
+export type ProjectGraph = {
+  nodes: ProjectNode[];
+  edges: ProjectEdge[];
+  warnings: string[];
+};
+
 export type ProfileRepoResult = { fullName: string; htmlUrl: string };
 
 export type FileWriteResult = {
@@ -589,12 +642,16 @@ export type ExtractPlan = {
   requiresBackup: boolean;
   backupPath: string | null;
   historyPrefix: string | null;
+  engine: string;
+  branch: string | null;
 };
 
 export type ExtractResult = {
   ok: boolean;
   strategy: string;
   target: string;
+  engine: string;
+  branch: string | null;
   fileCount: number;
   totalBytes: number;
   backupPath: string | null;
@@ -642,6 +699,7 @@ export const api = {
   openExternal: (url: string) => call<void>("open_external", { url }),
 
   githubStatus: () => call<GithubAuthStatus>("github_status"),
+  githubRateLimit: () => call<RateLimits>("github_rate_limit"),
   setGithubClientId: (clientId: string) =>
     call<void>("github_set_client_id", { clientId }),
   startDeviceFlow: () => call<DeviceStart>("github_start_device"),
@@ -837,10 +895,14 @@ export const api = {
 
   repoIssues: (owner: string, repo: string, state: string) =>
     call<RepoIssue[]>("github_repo_issues", { owner, repo, state }),
+  repoReleases: (owner: string, repo: string) =>
+    call<RepoRelease[]>("github_repo_releases", { owner, repo }),
   createIssue: (owner: string, repo: string, title: string, body: string) =>
     call<RepoIssue>("github_create_issue", { owner, repo, title, body }),
   createProfileRepo: (login: string) =>
     call<ProfileRepoResult>("github_create_profile_repo", { login }),
+
+  projectGraph: () => call<ProjectGraph>("project_graph"),
 
   repoSaveFile: (
     owner: string,
@@ -872,13 +934,23 @@ export const api = {
     strategy: string,
     target: string,
     name: string,
-  ) => call<ExtractPlan>("extract_plan", { source, selection, strategy, target, name }),
+    engine: string,
+  ) =>
+    call<ExtractPlan>("extract_plan", {
+      source,
+      selection,
+      strategy,
+      target,
+      name,
+      engine,
+    }),
   extractExecute: (
     source: string,
     selection: string[],
     strategy: string,
     target: string,
     name: string,
+    engine: string,
     confirmed: boolean,
   ) =>
     call<ExtractResult>("extract_execute", {
@@ -887,6 +959,7 @@ export const api = {
       strategy,
       target,
       name,
+      engine,
       confirmed,
     }),
   extractRuns: () => call<ExtractionRun[]>("extract_runs"),

@@ -10,11 +10,14 @@
     executePlan,
     extract,
     isCovered,
+    isGitStrategy,
     isSelected,
     invalidatePlan,
     loadRuns,
+    planInputsValid,
     resetSource,
     scanSource,
+    setEngine,
     setStrategy,
     toggleSelection,
     type ExtractStrategy,
@@ -81,7 +84,17 @@
     {
       id: "history",
       label: "With history",
-      hint: "Clone the repository and use git subtree to carry the component directory's commits into a new repository.",
+      hint: "Clone the repository and carry the component directory's commits into a new repository.",
+    },
+    {
+      id: "branch",
+      label: "Local branch",
+      hint: "Create a branch in the source from the component directory with git subtree split. No files change.",
+    },
+    {
+      id: "fork",
+      label: "Fork with history",
+      hint: "Clone the component with its commits and keep the source repository as the upstream remote.",
     },
   ];
 
@@ -144,9 +157,12 @@
 
   const strategy = $derived(strategies.find((entry) => entry.id === extract.strategy)!);
   const needsConfirmation = $derived(extract.strategy !== "copy");
+  const gitStrategy = $derived(isGitStrategy());
+  const branchMode = $derived(extract.strategy === "branch");
 
   const graph = $derived.by<RelationshipGraph>(() => {
-    const runs = extract.runs.slice(0, GRAPH_RUNS);
+    const relevant = extract.runs.filter((run) => run.strategy !== "branch");
+    const runs = relevant.slice(0, GRAPH_RUNS);
     const nodes = new Map<
       string,
       { label: string; incoming: boolean; outgoing: boolean; level: number }
@@ -157,7 +173,7 @@
         edges: [],
         width: 0,
         height: 0,
-        totalRuns: extract.runs.length,
+        totalRuns: relevant.length,
         shownRuns: 0,
       };
     }
@@ -351,8 +367,8 @@
       <h1 class="view-title">Extract Studio</h1>
       <p class="view-sub">
         Find one component inside a large repository, understand what it depends on and what
-        depends on it, then copy, move or split it into a new project with a plan you approve
-        before anything is written.
+        depends on it, then copy, move, split, branch or fork it into a new project with a plan
+        you approve before anything is written.
       </p>
     </div>
     <div class="head-actions">
@@ -716,23 +732,48 @@
       </div>
 
       <div class="plan-fields">
+        {#if !branchMode}
+          <label class="plan-field">
+            <span class="mono-label">new folder</span>
+            <input class="field" bind:value={extract.target} oninput={invalidatePlan} placeholder="~/Projects/my-component" spellcheck="false" />
+          </label>
+        {/if}
         <label class="plan-field">
-          <span class="mono-label">new folder</span>
-          <input class="field" bind:value={extract.target} oninput={invalidatePlan} placeholder="~/Projects/my-component" spellcheck="false" />
-        </label>
-        <label class="plan-field">
-          <span class="mono-label">project name</span>
-          <input class="field" bind:value={extract.name} oninput={invalidatePlan} placeholder="my-component" spellcheck="false" />
+          <span class="mono-label">{branchMode ? "branch name" : "project name"}</span>
+          <input class="field" bind:value={extract.name} oninput={invalidatePlan} placeholder={branchMode ? "component-branch" : "my-component"} spellcheck="false" />
         </label>
         <button
           class="btn primary plan-button"
           onclick={() => void runPlan()}
-          disabled={extract.planning || extract.selection.length === 0}
+          disabled={extract.planning || !planInputsValid()}
         >
           <span class:spin={extract.planning}><Icon name="check" size={12} /></span>
           {extract.planning ? "Checking…" : "Build plan"}
         </button>
       </div>
+      {#if gitStrategy && !branchMode}
+        <div class="engine-row">
+          <span class="mono-label">history engine</span>
+          <div class="engine-options">
+            <button
+              class="engine"
+              class:active={extract.engine === "subtree"}
+              onclick={() => setEngine("subtree")}
+            >
+              <span>subtree</span>
+              <span class="engine-hint">included with git</span>
+            </button>
+            <button
+              class="engine"
+              class:active={extract.engine === "filter-repo"}
+              onclick={() => setEngine("filter-repo")}
+            >
+              <span>filter-repo</span>
+              <span class="engine-hint">requires git-filter-repo</span>
+            </button>
+          </div>
+        </div>
+      {/if}
       <p class="strategy-note">{strategy.hint}</p>
 
       {#if plan}
@@ -741,6 +782,9 @@
             <span>{plural(plan.fileCount, "file")}</span>
             <span>{bytes(plan.totalBytes)}</span>
             <span>{plan.strategy}</span>
+            {#if plan.strategy === "history" || plan.strategy === "fork"}
+              <span>{plan.engine}</span>
+            {/if}
             <span class="faint">→</span>
             <span>{plan.target}</span>
           </div>
@@ -766,14 +810,19 @@
           {/if}
 
           <div class="action-summary">
-            <span class="mono-label">writes</span>
-            <span class="mono faint">{plural(writeCount, "file")} into {plan.target}</span>
-            {#if plan.requiresBackup && plan.backupPath}
-              <span class="mono-label backup-label">backup</span>
-              <span class="mono faint">{plan.backupPath}</span>
+            {#if plan.strategy === "branch"}
+              <span class="mono-label">branch</span>
+              <span class="mono faint">{plan.branch} in {plan.source}</span>
+            {:else}
+              <span class="mono-label">writes</span>
+              <span class="mono faint">{plural(writeCount, "file")} into {plan.target}</span>
+              {#if plan.requiresBackup && plan.backupPath}
+                <span class="mono-label backup-label">backup</span>
+                <span class="mono faint">{plan.backupPath}</span>
+              {/if}
             {/if}
             {#if plan.historyPrefix}
-              <span class="mono-label backup-label">history prefix</span>
+              <span class="mono-label backup-label">component directory</span>
               <span class="mono faint">{plan.historyPrefix}/</span>
             {/if}
           </div>
@@ -795,6 +844,12 @@
                   Move will copy {plural(plan.fileCount, "file")} to {plan.target}, verify them,
                   write a full backup, then remove the originals from {plan.source}. The source
                   repository will change.
+                {:else if plan.strategy === "branch"}
+                  This creates branch <span class="mono">{plan.branch}</span> in {plan.source}
+                  from {plan.historyPrefix}/. It does not copy, move or remove any files.
+                {:else if plan.strategy === "fork"}
+                  Forking clones {plan.source}, carries the history of {plan.historyPrefix}/ into
+                  {plan.target}, and keeps the source repository as the upstream remote.
                 {:else}
                   Git history extraction clones {plan.source}, rewrites the component directory
                   into a standalone repository at {plan.target}, and keeps the source untouched.
@@ -808,8 +863,14 @@
                   {#if extract.executing}
                     <span class="spin"><Icon name="refresh" size={12} /></span>
                     Working…
+                  {:else if plan.strategy === "move"}
+                    Move and remove originals
+                  {:else if plan.strategy === "branch"}
+                    Create branch
+                  {:else if plan.strategy === "fork"}
+                    Create fork with history
                   {:else}
-                    {plan.strategy === "move" ? "Move and remove originals" : "Split history"}
+                    Split history
                   {/if}
                 </button>
               </div>
@@ -824,11 +885,21 @@
               >
                 {#if extract.executing}
                   <span class="spin"><Icon name="refresh" size={12} /></span>
-                  {extract.strategy === "history" ? "Splitting history…" : "Writing…"}
+                  {extract.strategy === "history"
+                    ? "Splitting history…"
+                    : extract.strategy === "branch"
+                      ? "Creating branch…"
+                      : extract.strategy === "fork"
+                        ? "Forking…"
+                        : "Writing…"}
                 {:else if plan.strategy === "copy"}
                   Copy to new project
                 {:else if plan.strategy === "move"}
                   Review move…
+                {:else if plan.strategy === "branch"}
+                  Review branch creation…
+                {:else if plan.strategy === "fork"}
+                  Review fork…
                 {:else}
                   Review history extraction…
                 {/if}
@@ -1464,7 +1535,7 @@
 
   .strategy-row {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
     gap: 6px;
     margin-bottom: 10px;
   }
@@ -1533,6 +1604,48 @@
 
   .strategy-note {
     margin: 7px 0 0;
+    color: var(--text-faint);
+    font-size: 10px;
+  }
+
+  .engine-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+  }
+
+  .engine-options {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .engine {
+    display: grid;
+    gap: 1px;
+    text-align: left;
+    padding: 5px 9px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--font-small);
+  }
+
+  .engine:hover {
+    border-color: var(--border-strong);
+  }
+
+  .engine.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  .engine-hint {
     color: var(--text-faint);
     font-size: 10px;
   }

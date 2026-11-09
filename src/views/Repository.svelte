@@ -16,6 +16,7 @@
     type RepoPullComment,
     type RepoPullDetail,
     type RepoPullReview,
+    type RepoRelease,
   } from "../lib/api";
   import { closeRepo, github, loadRepos } from "../lib/state/github.svelte";
   import { notify, ui } from "../lib/state/ui.svelte";
@@ -31,7 +32,7 @@
   import DiffView from "../lib/components/DiffView.svelte";
   import BranchGraph from "../lib/components/BranchGraph.svelte";
 
-  type Tab = "overview" | "code" | "commits" | "pulls" | "issues" | "branches";
+  type Tab = "overview" | "code" | "commits" | "pulls" | "issues" | "branches" | "releases";
 
   const repo = $derived(github.selected);
   const owner = $derived(repo?.owner?.login ?? repo?.fullName.split("/")[0] ?? "");
@@ -59,6 +60,8 @@
 
   let branches = $state<RepoBranch[]>([]);
   let branch = $state<string | null>(null);
+  let releases = $state<RepoRelease[]>([]);
+  let releasesLoading = $state(false);
   let commits = $state<RepoCommit[]>([]);
   let commitsLoading = $state(false);
   let commitPage = $state(1);
@@ -144,7 +147,7 @@
       readme = readmeFile;
       branch = info.defaultBranch;
       clonePath = await api.cloneDestination(owner, name).catch(() => "");
-      await Promise.all([loadDir([]), loadBranches(), loadCommits(true), loadPulls(), loadIssues()]);
+      await Promise.all([loadDir([]), loadBranches(), loadCommits(true), loadPulls(), loadIssues(), loadReleases()]);
       const focus = ui.repositoryFocus;
       ui.repositoryFocus = null;
       if (focus) {
@@ -183,6 +186,8 @@
         await loadPulls();
       } else if (tab === "issues") {
         await loadIssues();
+      } else if (tab === "releases") {
+        await loadReleases();
       }
       lastRefresh = Date.now();
       if (!silent) notify("Repository refreshed from GitHub", "ok");
@@ -448,6 +453,17 @@
   function setIssueState(next: "open" | "closed" | "all"): void {
     issueState = next;
     void loadIssues();
+  }
+
+  async function loadReleases(): Promise<void> {
+    releasesLoading = true;
+    try {
+      releases = await api.repoReleases(owner, name);
+    } catch (cause) {
+      notify(message(cause), "danger");
+    } finally {
+      releasesLoading = false;
+    }
   }
 
   function resetIssueForm(): void {
@@ -717,7 +733,7 @@
       {/if}
 
       <div class="tabs" role="tablist">
-        {#each [["overview", "Overview"], ["code", "Code"], ["commits", "Commits"], ["pulls", "Pull requests"], ["issues", "Issues"], ["branches", "Branches"]] as [id, label]}
+        {#each [["overview", "Overview"], ["code", "Code"], ["commits", "Commits"], ["pulls", "Pull requests"], ["issues", "Issues"], ["branches", "Branches"], ["releases", "Releases"]] as [id, label]}
           <button
             class="tab"
             class:active={tab === id}
@@ -729,6 +745,7 @@
             {#if id === "pulls" && pulls.length}<span class="count">{pulls.length}</span>{/if}
             {#if id === "issues" && issues.length}<span class="count">{issues.length}</span>{/if}
             {#if id === "branches" && branches.length}<span class="count">{branches.length}</span>{/if}
+            {#if id === "releases" && releases.length}<span class="count">{releases.length}</span>{/if}
           </button>
         {/each}
       </div>
@@ -1165,6 +1182,40 @@
                     {#if item.protected}<span class="badge">protected</span>{/if}
                     <span class="mono faint">{item.sha.slice(0, 7)}</span>
                   </button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </div>
+      {:else if tab === "releases"}
+        <div class="panel split">
+          {#if releasesLoading && releases.length === 0}
+            <p class="state mono">reading releases…</p>
+          {:else if releases.length === 0}
+            <p class="state">No releases have been published.</p>
+          {:else}
+            <ul class="releases">
+              {#each releases as release (release.id)}
+                <li class="release">
+                  <div class="release-head">
+                    <span class="mono tag">{release.tagName}</span>
+                    {#if release.name}<span class="release-name">{release.name}</span>{/if}
+                    {#if release.draft}<span class="badge">draft</span>{/if}
+                    {#if release.prerelease}<span class="badge warn">prerelease</span>{/if}
+                    <span class="mono faint when">
+                      {release.publishedAt ? relativeTime(Date.parse(release.publishedAt) / 1000) : "unpublished"}
+                    </span>
+                  </div>
+                  <p class="hint">
+                    {release.authorLogin} · {release.targetCommitish}
+                    {#if release.assetCount}
+                      · {plural(release.assetCount, "asset")} · {release.downloadCount.toLocaleString()} downloads
+                    {/if}
+                    · <button class="link" onclick={() => open(release.htmlUrl)}>open release ↗</button>
+                  </p>
+                  {#if release.body}
+                    <pre class="release-body">{release.body}</pre>
+                  {/if}
                 </li>
               {/each}
             </ul>
@@ -1790,6 +1841,56 @@
   .commit:hover,
   .branch-row:hover {
     background: var(--bg-elev);
+  }
+
+  .releases {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .release {
+    padding: 9px 10px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  }
+
+  .release:last-child {
+    border-bottom: 0;
+  }
+
+  .release-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 7px;
+  }
+
+  .release-head .tag {
+    color: var(--accent);
+    font-size: 10px;
+  }
+
+  .release-name {
+    font-size: 10.5px;
+    font-weight: 600;
+  }
+
+  .release-head .when {
+    margin-left: auto;
+  }
+
+  .release-body {
+    margin: 7px 0 0;
+    padding: 7px 9px;
+    max-height: 180px;
+    overflow: auto;
+    border-left: 2px solid var(--border);
+    background: var(--bg-elev);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
   .sha,
