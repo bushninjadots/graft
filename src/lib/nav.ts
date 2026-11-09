@@ -173,13 +173,13 @@ export const NAV_ITEMS: NavItem[] = [
     id: "plugins",
     label: "Plugin Marketplace",
     group: "System",
-    status: "planned",
+    status: "ready",
     phase: 6,
-    summary: "Optional capabilities with declared, reviewable permissions.",
+    summary: "Signed declarative packages with explicit capability and key review.",
     bullets: [
-      "Capability-based permissions with explicit approval",
-      "Themes, integrations and native GRAFT plugins kept distinct",
-      "Signed plugins and version checks",
+      "Ed25519-signed themes and integration metadata; no plugin code runs",
+      "Trust-on-first-use fingerprints, version checks and readable uninstall",
+      "Real detection status for Ollama, Docker, GitHub CLI, rust-analyzer, Claude Code and OpenCode",
     ],
   },
   {
