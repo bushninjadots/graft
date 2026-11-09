@@ -129,6 +129,8 @@ pub fn run() {
             plugins::plugin_uninstall,
             plugins::plugin_keys,
             plugins::plugin_remove_key,
+            plugins::plugin_registry,
+            plugins::plugin_install,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start GRAFT");

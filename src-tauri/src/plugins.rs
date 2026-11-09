@@ -316,6 +316,7 @@ pub fn valid_colour(value: &str) -> bool {
 
 const REGISTRY_MAX_BYTES: usize = 1024 * 1024;
 const REGISTRY_MAX_ENTRIES: usize = 500;
+const SIGNATURE_MAX_BYTES: usize = 1024;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1067,6 +1068,81 @@ pub fn remove_trusted_key(db: &Db, fingerprint: &str, confirmed: bool) -> Result
     Ok(())
 }
 
+fn http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(20))
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent("GRAFT/0.1.0")
+        .build()
+        .map_err(|error| format!("cannot create the plugin HTTP client: {error}"))
+}
+
+async fn fetch_limited(
+    client: &reqwest::Client,
+    url: &reqwest::Url,
+    limit: usize,
+) -> Result<Vec<u8>, String> {
+    let mut response = client
+        .get(url.clone())
+        .send()
+        .await
+        .map_err(|error| format!("cannot fetch {url}: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("The server returned HTTP {}.", response.status()));
+    }
+    if response.content_length().unwrap_or(0) > limit as u64 {
+        return Err("The response is larger than allowed.".into());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("cannot read {url}: {error}"))?
+    {
+        if body.len() + chunk.len() > limit {
+            return Err("The response is larger than allowed.".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+#[tauri::command]
+pub async fn plugin_registry(url: String) -> Result<PluginRegistry, String> {
+    let parsed = validate_registry_url(&url)?;
+    let client = http_client()?;
+    let bytes = fetch_limited(&client, &parsed, REGISTRY_MAX_BYTES).await?;
+    parse_registry(&bytes, parsed.as_str())
+}
+
+#[tauri::command]
+pub async fn plugin_install(
+    db: State<'_, Db>,
+    entry: RegistryPlugin,
+    trust_key: bool,
+    confirmed: bool,
+) -> Result<PluginRecord, String> {
+    if !confirmed {
+        return Err("Installation requires confirmation.".into());
+    }
+    let manifest_url = validate_package_url(&entry.manifest_url, true)?;
+    let signature_url = validate_package_url(&entry.signature_url, true)?;
+    let client = http_client()?;
+    let manifest = fetch_limited(&client, &manifest_url, MANIFEST_MAX_BYTES).await?;
+    let signature = fetch_limited(&client, &signature_url, SIGNATURE_MAX_BYTES).await?;
+    let signature = String::from_utf8(signature)
+        .map_err(|_| "The signature file is not UTF-8 text.".to_string())?;
+    install_verified(
+        &db,
+        &entry,
+        &manifest,
+        signature.trim(),
+        trust_key,
+        confirmed,
+    )
+}
+
 #[tauri::command]
 pub fn plugin_installed(db: State<'_, Db>) -> Result<Vec<PluginRecord>, String> {
     read_installed(&db)
@@ -1547,5 +1623,47 @@ mod tests {
         remove_trusted_key(&db, &record.fingerprint, true).expect("remove key");
 
         cleanup(&path);
+    }
+
+    fn serve_once(response: Vec<u8>) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("address");
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut request = [0u8; 2048];
+                let _ = stream.read(&mut request);
+                let _ = stream.write_all(&response);
+            }
+        });
+        format!("http://{address}/plugin")
+    }
+
+    #[test]
+    fn fetch_limit_rejects_oversized_bodies() {
+        let body = "x".repeat(200);
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .into_bytes();
+        let url = reqwest::Url::parse(&serve_once(response)).unwrap();
+        let result = tauri::async_runtime::block_on(async {
+            let client = http_client().expect("client");
+            fetch_limited(&client, &url, 100).await
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn client_does_not_follow_redirects() {
+        let response = b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9/other\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec();
+        let url = reqwest::Url::parse(&serve_once(response)).unwrap();
+        let result = tauri::async_runtime::block_on(async {
+            let client = http_client().expect("client");
+            fetch_limited(&client, &url, 1024).await
+        });
+        assert!(result.is_err());
     }
 }
