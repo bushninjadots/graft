@@ -1,4 +1,8 @@
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::tools;
 
@@ -306,9 +310,332 @@ pub fn valid_colour(value: &str) -> bool {
     alpha.is_finite() && (0.0..=1.0).contains(&alpha)
 }
 
+const REGISTRY_MAX_BYTES: usize = 1024 * 1024;
+const REGISTRY_MAX_ENTRIES: usize = 500;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginRegistry {
+    pub name: String,
+    pub updated_at: String,
+    pub plugins: Vec<RegistryPlugin>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RegistryPlugin {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub kind: PluginKind,
+    pub summary: String,
+    pub manifest_url: String,
+    pub manifest_sha256: String,
+    pub signature_url: String,
+    pub public_key: String,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RegistryEntry {
+    id: String,
+    name: String,
+    version: String,
+    kind: PluginKind,
+    summary: String,
+    manifest_url: String,
+    manifest_sha256: String,
+    signature_url: String,
+    public_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RegistryIndex {
+    schema: u32,
+    name: String,
+    updated_at: String,
+    plugins: Vec<RegistryEntry>,
+}
+
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+}
+
+pub fn fingerprint(public_key: &[u8]) -> String {
+    sha256_hex(public_key)
+}
+
+fn decode_public_key(value: &str) -> Result<[u8; 32], String> {
+    let value = value.trim();
+    if value.len() > 256 {
+        return Err("The plugin public key is too long.".into());
+    }
+    let decoded = STANDARD
+        .decode(value)
+        .map_err(|_| "The plugin public key is not valid base64.".to_string())?;
+    decoded
+        .try_into()
+        .map_err(|_| "The plugin public key must be 32 bytes.".to_string())
+}
+
+pub fn verify_manifest_signature(
+    manifest: &[u8],
+    signature_b64: &str,
+    public_key_b64: &str,
+) -> Result<(), String> {
+    let key_bytes = decode_public_key(public_key_b64)?;
+    let key = VerifyingKey::from_bytes(&key_bytes)
+        .map_err(|_| "The plugin public key is invalid.".to_string())?;
+    let signature_bytes = STANDARD
+        .decode(signature_b64.trim())
+        .map_err(|_| "The plugin signature is not valid base64.".to_string())?;
+    let signature_bytes: [u8; 64] = signature_bytes
+        .try_into()
+        .map_err(|_| "The plugin signature must be 64 bytes.".to_string())?;
+    let signature = Signature::from_bytes(&signature_bytes);
+    key.verify_strict(manifest, &signature)
+        .map_err(|_| "The plugin signature is invalid.".to_string())
+}
+
+fn parse_plugin_url(value: &str, allow_loopback_http: bool) -> Result<reqwest::Url, String> {
+    if value.chars().count() > 2048 {
+        return Err("The plugin URL is too long.".into());
+    }
+    let url =
+        reqwest::Url::parse(value).map_err(|_| "The plugin URL must be absolute.".to_string())?;
+    if url.host_str().is_none() {
+        return Err("The plugin URL must include a host.".into());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("The plugin URL must not include credentials.".into());
+    }
+    if url.fragment().is_some() {
+        return Err("The plugin URL must not include a fragment.".into());
+    }
+    if !allow_loopback_http && is_loopback_url(&url) {
+        return Err("A remote registry cannot point at a loopback address.".into());
+    }
+    if url.scheme() != "https"
+        && !(url.scheme() == "http" && allow_loopback_http && is_loopback_url(&url))
+    {
+        return Err(
+            "Plugin URLs must use HTTPS (HTTP is only allowed for loopback development).".into(),
+        );
+    }
+    Ok(url)
+}
+
+pub fn validate_registry_url(value: &str) -> Result<reqwest::Url, String> {
+    parse_plugin_url(value, true)
+}
+
+pub fn validate_package_url(
+    value: &str,
+    allow_loopback_http: bool,
+) -> Result<reqwest::Url, String> {
+    parse_plugin_url(value, allow_loopback_http)
+}
+
+pub fn is_loopback_url(url: &reqwest::Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|address| address.is_loopback())
+            .unwrap_or(false)
+}
+
+pub fn parse_registry(bytes: &[u8], registry_url: &str) -> Result<PluginRegistry, String> {
+    if bytes.len() > REGISTRY_MAX_BYTES {
+        return Err(format!(
+            "The plugin registry is larger than {} KiB.",
+            REGISTRY_MAX_BYTES / 1024
+        ));
+    }
+    let index: RegistryIndex = serde_json::from_slice(bytes)
+        .map_err(|error| format!("The plugin registry is not valid: {error}"))?;
+    if index.schema != 1 {
+        return Err(format!(
+            "Unsupported plugin registry schema {} (expected 1).",
+            index.schema
+        ));
+    }
+    if !length_ok(&index.name, 1, 100) {
+        return Err("The registry name must be between 1 and 100 characters.".into());
+    }
+    let updated_at = index.updated_at.trim();
+    if updated_at.is_empty() || updated_at.chars().count() > 40 {
+        return Err("The registry updatedAt value must be between 1 and 40 characters.".into());
+    }
+    if index.plugins.len() > REGISTRY_MAX_ENTRIES {
+        return Err(format!(
+            "The plugin registry has more than {REGISTRY_MAX_ENTRIES} entries."
+        ));
+    }
+
+    let registry = validate_registry_url(registry_url)?;
+    let allow_loopback = is_loopback_url(&registry);
+    let mut seen = std::collections::HashSet::new();
+    let mut plugins = Vec::with_capacity(index.plugins.len());
+    for entry in index.plugins {
+        if !valid_id(&entry.id) {
+            return Err(format!("The registry entry id {:?} is invalid.", entry.id));
+        }
+        if !seen.insert(entry.id.clone()) {
+            return Err(format!(
+                "The registry lists the plugin id {} more than once.",
+                entry.id
+            ));
+        }
+        if !length_ok(&entry.name, 1, 60) {
+            return Err(format!(
+                "The registry entry {} has an invalid name.",
+                entry.id
+            ));
+        }
+        if entry.version.chars().count() > 32 {
+            return Err(format!(
+                "The registry entry {} has a version that is too long.",
+                entry.id
+            ));
+        }
+        semver::Version::parse(&entry.version).map_err(|_| {
+            format!(
+                "The registry entry {} must have a valid SemVer version.",
+                entry.id
+            )
+        })?;
+        if !length_ok(&entry.summary, 1, 200) {
+            return Err(format!(
+                "The registry entry {} has an invalid summary.",
+                entry.id
+            ));
+        }
+        validate_package_url(&entry.manifest_url, allow_loopback).map_err(|error| {
+            format!(
+                "The registry entry {} has an invalid manifest URL: {error}",
+                entry.id
+            )
+        })?;
+        validate_package_url(&entry.signature_url, allow_loopback).map_err(|error| {
+            format!(
+                "The registry entry {} has an invalid signature URL: {error}",
+                entry.id
+            )
+        })?;
+
+        let manifest_sha256 = entry.manifest_sha256.trim().to_ascii_lowercase();
+        if manifest_sha256.len() != 64
+            || !manifest_sha256
+                .chars()
+                .all(|character| character.is_ascii_hexdigit())
+        {
+            return Err(format!(
+                "The registry entry {} has an invalid manifest SHA-256.",
+                entry.id
+            ));
+        }
+        let public_key = entry.public_key.trim().to_string();
+        let key = decode_public_key(&public_key).map_err(|error| {
+            format!(
+                "The registry entry {} has an invalid key: {error}",
+                entry.id
+            )
+        })?;
+        let fingerprint = fingerprint(&key);
+
+        plugins.push(RegistryPlugin {
+            id: entry.id,
+            name: entry.name,
+            version: entry.version,
+            kind: entry.kind,
+            summary: entry.summary,
+            manifest_url: entry.manifest_url,
+            manifest_sha256,
+            signature_url: entry.signature_url,
+            public_key,
+            fingerprint,
+        });
+    }
+
+    Ok(PluginRegistry {
+        name: index.name,
+        updated_at: index.updated_at,
+        plugins,
+    })
+}
+
+pub fn check_entry_matches(manifest: &Manifest, entry: &RegistryPlugin) -> Result<(), String> {
+    if manifest.id != entry.id
+        || manifest.version != entry.version
+        || manifest.kind != entry.kind
+        || manifest.name != entry.name
+        || manifest.summary != entry.summary
+    {
+        return Err("The registry entry does not match the signed manifest.".into());
+    }
+    Ok(())
+}
+
+pub fn check_version(
+    existing_version: Option<&str>,
+    existing_fingerprint: Option<&str>,
+    version: &str,
+    fingerprint: &str,
+) -> Result<(), String> {
+    let next = semver::Version::parse(version)
+        .map_err(|_| "The plugin version must be valid SemVer.".to_string())?;
+    let Some(existing_version) = existing_version else {
+        return Ok(());
+    };
+    let Some(existing_fingerprint) = existing_fingerprint else {
+        return Err("The installed plugin has no recorded signing key.".into());
+    };
+    if !existing_fingerprint.eq_ignore_ascii_case(fingerprint) {
+        return Err("This plugin id is already signed by a different key. Uninstall it before trusting a new publisher.".into());
+    }
+    let current = semver::Version::parse(existing_version)
+        .map_err(|_| "The installed plugin version is not valid SemVer.".to_string())?;
+    if next < current {
+        return Err(format!(
+            "This plugin version ({next}) is older than the installed version ({current})."
+        ));
+    }
+    Ok(())
+}
+
+pub fn check_min_app_version(value: Option<&str>) -> Result<(), String> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if value.chars().count() > 32 {
+        return Err("minAppVersion is too long.".into());
+    }
+    let minimum = semver::Version::parse(value)
+        .map_err(|_| "minAppVersion must be valid SemVer.".to_string())?;
+    let current = semver::Version::parse(env!("CARGO_PKG_VERSION"))
+        .map_err(|_| "The application version is not valid SemVer.".to_string())?;
+    if minimum > current {
+        return Err(format!(
+            "This plugin needs GRAFT {minimum} or newer (this build is {current})."
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
     use serde_json::{json, Value};
 
     fn theme_value() -> Value {
@@ -459,5 +786,139 @@ mod tests {
         value["integration"]["tools"] = json!(["ollama"]);
         value["integration"]["notes"] = json!("");
         assert!(parse_manifest(&bytes(&value)).is_err());
+    }
+
+    fn key_b64(key: &SigningKey) -> String {
+        STANDARD.encode(key.verifying_key().to_bytes())
+    }
+
+    fn entry_for(manifest: &[u8], public_key: &str) -> RegistryPlugin {
+        let parsed = parse_manifest(manifest).expect("manifest for registry entry");
+        RegistryPlugin {
+            id: parsed.id,
+            name: parsed.name,
+            version: parsed.version,
+            kind: parsed.kind,
+            summary: parsed.summary,
+            manifest_url: "https://example.dev/night-owl/plugin.json".into(),
+            manifest_sha256: sha256_hex(manifest),
+            signature_url: "https://example.dev/night-owl/plugin.json.sig".into(),
+            public_key: public_key.into(),
+            fingerprint: fingerprint(&STANDARD.decode(public_key).unwrap()),
+        }
+    }
+
+    fn registry_value(manifest_url: &str) -> Value {
+        json!({
+            "schema": 1,
+            "name": "Example Registry",
+            "updatedAt": "2026-11-09T12:00:00Z",
+            "plugins": [{
+                "id": "dev.example.night-owl",
+                "name": "Night Owl",
+                "version": "1.2.0",
+                "kind": "theme",
+                "summary": "A low-glare theme for late sessions.",
+                "manifestUrl": manifest_url,
+                "manifestSha256": "a".repeat(64),
+                "signatureUrl": "https://example.dev/night-owl/plugin.json.sig",
+                "publicKey": STANDARD.encode([9u8; 32])
+            }]
+        })
+    }
+
+    #[test]
+    fn verifies_ed25519_and_rejects_tampering() {
+        let key = SigningKey::from_bytes(&[7u8; 32]);
+        let manifest = br#"{"schema":1}"#;
+        let signature = STANDARD.encode(key.sign(manifest).to_bytes());
+        let public_key = key_b64(&key);
+
+        assert!(verify_manifest_signature(manifest, &signature, &public_key).is_ok());
+        assert!(verify_manifest_signature(b"{}", &signature, &public_key).is_err());
+
+        let other = SigningKey::from_bytes(&[8u8; 32]);
+        assert!(verify_manifest_signature(manifest, &signature, &key_b64(&other)).is_err());
+        assert!(verify_manifest_signature(manifest, "not base64!", &public_key).is_err());
+        assert!(verify_manifest_signature(manifest, &signature, "short").is_err());
+        assert!(
+            verify_manifest_signature(manifest, &format!(" {signature} "), &public_key).is_ok()
+        );
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn validates_registry_and_package_urls() {
+        assert!(validate_registry_url("https://example.com/index.json").is_ok());
+        assert!(validate_registry_url("http://localhost:8080/index.json").is_ok());
+        assert!(validate_registry_url("http://example.com/index.json").is_err());
+        assert!(validate_registry_url("https://user:pass@example.com/x").is_err());
+        assert!(validate_registry_url("https://example.com/x#frag").is_err());
+        assert!(validate_package_url("http://127.0.0.1:8080/p.json", false).is_err());
+        assert!(validate_package_url("http://127.0.0.1:8080/p.json", true).is_ok());
+    }
+
+    #[test]
+    fn remote_registries_cannot_point_packages_at_loopback() {
+        let remote =
+            serde_json::to_vec(&registry_value("http://127.0.0.1:8000/plugin.json")).unwrap();
+        assert!(parse_registry(&remote, "https://example.com/index.json").is_err());
+
+        let loopback =
+            serde_json::to_vec(&registry_value("http://127.0.0.1:8000/plugin.json")).unwrap();
+        let parsed = parse_registry(&loopback, "http://127.0.0.1:9000/index.json")
+            .expect("loopback registry");
+        assert_eq!(parsed.plugins[0].fingerprint, fingerprint(&[9u8; 32]));
+    }
+
+    #[test]
+    fn rejects_duplicate_ids_and_bad_registry_entries() {
+        let mut value = registry_value("https://example.dev/plugin.json");
+        let duplicate = value["plugins"][0].clone();
+        value["plugins"].as_array_mut().unwrap().push(duplicate);
+        assert!(parse_registry(
+            &serde_json::to_vec(&value).unwrap(),
+            "https://example.com/index.json"
+        )
+        .is_err());
+
+        let mut value = registry_value("https://example.dev/plugin.json");
+        value["plugins"][0]["publicKey"] = json!("short");
+        assert!(parse_registry(
+            &serde_json::to_vec(&value).unwrap(),
+            "https://example.com/index.json"
+        )
+        .is_err());
+
+        let mut value = registry_value("https://example.dev/plugin.json");
+        value["plugins"][0]["manifestSha256"] = json!("not-hex");
+        assert!(parse_registry(
+            &serde_json::to_vec(&value).unwrap(),
+            "https://example.com/index.json"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn enforces_metadata_and_version_rules() {
+        let manifest = parse_manifest(&bytes(&theme_value())).unwrap();
+        let entry = entry_for(&bytes(&theme_value()), &STANDARD.encode([9u8; 32]));
+        assert!(check_entry_matches(&manifest, &entry).is_ok());
+
+        let mut mismatch = entry.clone();
+        mismatch.version = "2.0.0".into();
+        assert!(check_entry_matches(&manifest, &mismatch).is_err());
+
+        assert!(check_version(None, None, "1.0.0", "aa").is_ok());
+        assert!(check_version(Some("1.0.0"), Some("aa"), "1.1.0", "aa").is_ok());
+        assert!(check_version(Some("1.0.0"), Some("aa"), "1.0.0", "aa").is_ok());
+        assert!(check_version(Some("1.1.0"), Some("aa"), "1.0.0", "aa").is_err());
+        assert!(check_version(Some("1.0.0"), Some("aa"), "1.1.0", "bb").is_err());
+
+        assert!(check_min_app_version(Some("0.1.0")).is_ok());
+        assert!(check_min_app_version(Some("999.0.0")).is_err());
     }
 }
