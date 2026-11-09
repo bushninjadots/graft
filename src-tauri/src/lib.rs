@@ -5,6 +5,7 @@ mod extract;
 mod git;
 mod github;
 mod library;
+mod plugins;
 mod profile;
 mod relations;
 mod secrets;
