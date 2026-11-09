@@ -36,7 +36,15 @@ const TOOLS: &[ToolSpec] = &[
     ToolSpec { id: "fish", name: "fish", version_args: &["--version"] },
     ToolSpec { id: "zsh", name: "zsh", version_args: &["--version"] },
     ToolSpec { id: "hyprctl", name: "Hyprland", version_args: &["version"] },
+    ToolSpec { id: "ollama", name: "Ollama", version_args: &["--version"] },
+    ToolSpec { id: "rust-analyzer", name: "rust-analyzer", version_args: &["--version"] },
+    ToolSpec { id: "claude", name: "Claude Code", version_args: &["--version"] },
+    ToolSpec { id: "opencode", name: "OpenCode", version_args: &["--version"] },
 ];
+
+pub fn is_known_tool(id: &str) -> bool {
+    TOOLS.iter().any(|spec| spec.id == id)
+}
 
 pub fn detect() -> Vec<ToolInfo> {
     TOOLS
@@ -97,5 +105,18 @@ fn collapse(line: &str) -> String {
         format!("{cut}…")
     } else {
         trimmed.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn knows_the_phase_six_tools() {
+        for id in ["ollama", "docker", "gh", "rust-analyzer", "claude", "opencode"] {
+            assert!(is_known_tool(id), "{id} is missing from the tool allowlist");
+        }
+        assert!(!is_known_tool("definitely-not-a-tool"));
     }
 }

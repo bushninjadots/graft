@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 /// Bump together with a new file in `src/schema/` and a branch in `migrate`.
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 pub struct Db(pub Mutex<Connection>);
 
@@ -163,6 +163,11 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             .map_err(|e| format!("migration 006 failed: {e}"))?;
     }
 
+    if current < 7 {
+        conn.execute_batch(include_str!("schema/007_plugins.sql"))
+            .map_err(|e| format!("migration 007 failed: {e}"))?;
+    }
+
     conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
         .map_err(|e| format!("cannot record schema version: {e}"))?;
     Ok(())
@@ -229,6 +234,25 @@ mod tests {
         db.delete_setting("theme").expect("delete");
         assert_eq!(db.get_setting("theme").expect("read"), None);
 
+        cleanup(&path);
+    }
+
+    #[test]
+    fn migration_creates_plugin_tables() {
+        let path = temp_path("plugin-schema");
+        let db = Db::open(&path).expect("open");
+        let conn = db.conn();
+        let count = |name: &str| -> i64 {
+            conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = ?1",
+                [name],
+                |row| row.get(0),
+            )
+            .expect("count sqlite objects")
+        };
+        assert_eq!(count("plugins"), 1);
+        assert_eq!(count("plugin_keys"), 1);
+        assert_eq!(count("plugins_kind_idx"), 1);
         cleanup(&path);
     }
 
