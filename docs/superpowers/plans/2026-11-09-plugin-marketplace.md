@@ -179,8 +179,8 @@ pub fn is_known_tool(id: &str) -> bool {
 
 - [ ] **Step 8: Run the tests and commit**
 
-Run: `cargo test --manifest-path src-tauri/Cargo.toml db::tests::migration_creates_plugin_tables tools::tests::knows_the_phase_six_tools`
-Expected: PASS, both tests.
+Run: `cargo test --manifest-path src-tauri/Cargo.toml`
+Expected: PASS, including both new tests.
 
 ```bash
 git add src-tauri/Cargo.toml src-tauri/src/db.rs src-tauri/src/schema/007_plugins.sql src-tauri/src/tools.rs
