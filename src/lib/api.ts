@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { ProfileDesign } from "./profile";
+import type { ThemeTokens } from "./themes";
 
 export type Project = {
   id: number;
@@ -16,6 +17,63 @@ export type ToolInfo = {
   found: boolean;
   version: string | null;
   path: string | null;
+};
+
+export type PluginKind = "theme" | "integration";
+
+export type PluginTheme = {
+  scheme: "dark" | "light";
+  blurb: string;
+  tokens: Omit<ThemeTokens, "scheme">;
+};
+
+export type PluginIntegration = {
+  tools: string[];
+  notes: string;
+  docsUrl: string | null;
+};
+
+export type PluginRecord = {
+  id: string;
+  name: string;
+  version: string;
+  kind: PluginKind;
+  summary: string;
+  author: string;
+  capabilities: string[];
+  enabled: boolean;
+  verified: boolean;
+  fingerprint: string;
+  installedAt: number;
+  theme?: PluginTheme;
+  integration?: PluginIntegration;
+};
+
+export type RegistryPlugin = {
+  id: string;
+  name: string;
+  version: string;
+  kind: PluginKind;
+  summary: string;
+  fingerprint: string;
+  publicKey: string;
+  manifestUrl: string;
+  manifestSha256: string;
+  signatureUrl: string;
+};
+
+export type PluginRegistry = {
+  name: string;
+  updatedAt: string;
+  plugins: RegistryPlugin[];
+};
+
+export type TrustedKey = {
+  fingerprint: string;
+  publicKey: string;
+  label: string;
+  addedAt: number;
+  usedBy: string[];
 };
 
 export type AppInfo = {
@@ -1013,6 +1071,22 @@ export const api = {
     channel.onmessage = onEvent;
     return call<AiReply>("ai_chat", { request, channel });
   },
+
+  pluginInstalled: () => call<PluginRecord[]>("plugin_installed"),
+  pluginRegistry: (url: string) =>
+    call<PluginRegistry>("plugin_registry", { url }),
+  pluginInstall: (
+    entry: RegistryPlugin,
+    trustKey: boolean,
+    confirmed: boolean,
+  ) => call<PluginRecord>("plugin_install", { entry, trustKey, confirmed }),
+  pluginSetEnabled: (id: string, enabled: boolean) =>
+    call<PluginRecord>("plugin_set_enabled", { id, enabled }),
+  pluginUninstall: (id: string, confirmed: boolean) =>
+    call<void>("plugin_uninstall", { id, confirmed }),
+  pluginKeys: () => call<TrustedKey[]>("plugin_keys"),
+  pluginRemoveKey: (fingerprint: string, confirmed: boolean) =>
+    call<void>("plugin_remove_key", { fingerprint, confirmed }),
 
   repoSaveFile: (
     owner: string,

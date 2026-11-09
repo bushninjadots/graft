@@ -19,6 +19,7 @@
 │  tools.rs      environment probing                            │
 │  github.rs     auth, repos, search, reviews, issues, releases        │
 │  ai.rs         provider adapters, streaming chat, context, history  │
+│  plugins.rs    signed declarative packages, registry, trust, installs │
 │  relations.rs  local project graph from manifests + run log        │
 │  profile.rs    live profile snapshot + README renderer        │
 │  watchtower.rs favourites, polling, visits, radar discovery   │
@@ -45,13 +46,13 @@ Rules that keep this maintainable:
 | Path | Purpose |
 | ---- | ------- |
 | `src/App.svelte` | shell composition, keyboard shortcuts, boot sequence |
-| `src/views/` | Home, Projects, Repositories, Repository, Terminal, Review, Explore, Collections, Extract, ProfileStudio, Watchtower, Settings, AI, ModuleView |
-| `src/lib/state/` | `appearance`, `nav`, `dashboard`, `github`, `notifications`, `sync`, `session`, `terminal`, `watchtower`, `library`, `extract`, `ai`, `ui` |
+| `src/views/` | Home, Projects, Repositories, Repository, Terminal, Review, Explore, Collections, Extract, ProfileStudio, Watchtower, Settings, AI, Plugins, ModuleView |
+| `src/lib/state/` | `appearance`, `nav`, `dashboard`, `github`, `notifications`, `sync`, `session`, `terminal`, `watchtower`, `library`, `extract`, `ai`, `plugins`, `themeCatalog`, `ui` |
 | `src-tauri/src/schema/` | numbered SQL migrations, embedded with `include_str!` |
 | `~/.local/share/dev.graft.desktop/graft.db` | local database (WAL) |
 | `~/.local/share/dev.graft.desktop/` | app data root (Tauri `app_data_dir`) |
 
-## Data model (schema 6)
+## Data model (schema 7)
 
 ```sql
 settings(key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER)
@@ -73,6 +74,10 @@ ai_conversations(id INTEGER PK AUTOINCREMENT, title TEXT, provider TEXT, model T
 ai_messages(id INTEGER PK AUTOINCREMENT,
             conversation_id INTEGER REFERENCES ai_conversations(id) ON DELETE CASCADE,
             role TEXT, content TEXT, context TEXT DEFAULT '[]', created_at INTEGER)
+plugins(id TEXT PRIMARY KEY, name TEXT, version TEXT, kind TEXT, summary TEXT,
+        author TEXT, manifest TEXT, signature TEXT, public_key TEXT, fingerprint TEXT,
+        enabled INTEGER, installed_at INTEGER)
+plugin_keys(fingerprint TEXT PRIMARY KEY, public_key TEXT, label TEXT, added_at INTEGER)
 ```
 
 Migrations are append-only: add `schema/00N_*.sql`, bump `SCHEMA_VERSION`, add an
@@ -96,6 +101,7 @@ Settings blobs currently stored:
 | `repos.view` | repository layout (`list`, `cards`, `compact`) |
 | `repos.scope` | last repository source (`mine`, `explore`) |
 | `ai.preferences` | `{ providerId, model, endpoint, system }` — never API keys |
+| `plugins.registryUrl` | user-supplied HTTPS registry index; empty means no registry |
 
 Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`.
 
@@ -191,6 +197,13 @@ Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`
 | `ai_context_read` | `projectId, paths` | `AiContextItem[]` (path-confined, binary-safe, truncated) |
 | `ai_cancel` | `requestId` | `void` — stops the active stream after the current chunk |
 | `ai_chat` | `request, channel` | `AiReply`; streams `started`, `delta`, `done` or `cancelled` events |
+| `plugin_installed` | — | `PluginRecord[]`; signatures re-verified on every read |
+| `plugin_registry` | `url` | `PluginRegistry` (user-supplied index; network only) |
+| `plugin_install` | `entry, trustKey, confirmed` | `PluginRecord`; re-fetches and re-verifies the manifest and signature |
+| `plugin_set_enabled` | `id, enabled` | `PluginRecord`; enabling re-verifies the stored signature |
+| `plugin_uninstall` | `id, confirmed` | `void` |
+| `plugin_keys` | — | `TrustedKey[]` with the plugins each key signs |
+| `plugin_remove_key` | `fingerprint, confirmed` | `void` — refuses a key still in use |
 
 Serde maps snake_case fields to camelCase for JS. GitHub payloads deserialize from
 the API's snake_case and serialize with `rename_all(serialize = "camelCase")`. Bump this table when adding a
@@ -226,6 +239,17 @@ command, and add the matching wrapper in `lib/api.ts`.
   requests are cancelled in Rust, and a partial reply is still saved when stopped.
   Review and extraction assistants only prefill a conversation; they never submit a
   review, change a file or run an extraction.
+- Plugins are signed declarative JSON packages: themes and integration metadata, never
+  code, archives or filesystem paths. The registry index is size-capped, package
+  SHA-256 is checked before parsing, and an Ed25519 signature over the exact manifest
+  bytes is verified in Rust. Trust is per public-key fingerprint (trust-on-first-use)
+  and a key change for an installed plugin is refused until uninstall. Downgrades and
+  plugins requiring a newer app version are refused. Stored rows are re-verified on
+  read and on enable, and a tampered row is shown as unverified and never applied.
+  Theme manifests can only supply the named colour tokens, validated against a strict
+  hex/rgba grammar. The registry is fetched only when the Plugins view opens or the
+  user refreshes, never on boot; redirects are not followed. Uninstall and key removal
+  require confirmation and are re-validated in Rust.
 - `open_external` accepts `http(s)` only. Local Git writes are limited to stage,
   commit, branch create/switch, fetch, pull and push on directories the user linked;
   branch names are validated before they reach `git`.
@@ -260,6 +284,8 @@ command, and add the matching wrapper in `lib/api.ts`.
 - Lazy: no network, polling or watcher starts on boot; the engine opens SQLite only.
 - Lists are plain DOM for now; virtualise at the point a list can exceed ~200 rows.
 - `detect_tools` runs on demand and on the Environment module's refresh action.
+- Plugin installs read local SQLite only. The registry index is fetched when the
+  Plugins view opens or on an explicit Refresh, never during boot.
 - GitHub calls stay view-scoped: account refresh and unread notifications every
   90 seconds while signed in, repository pages only while a repository view is active
   or on explicit Refresh, and Git status per linked project on Projects. Focus sync
