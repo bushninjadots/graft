@@ -10,6 +10,10 @@ fn entry() -> Result<Entry, String> {
     Entry::new(SERVICE, ACCOUNT).map_err(explain)
 }
 
+fn ai_entry(provider: &str) -> Result<Entry, String> {
+    Entry::new(SERVICE, &format!("ai:{provider}")).map_err(explain)
+}
+
 fn explain(error: keyring::Error) -> String {
     match error {
         keyring::Error::PlatformFailure(cause) => format!(
@@ -40,6 +44,28 @@ pub fn load() -> Result<Option<String>, String> {
 /// Returns whether a credential was actually removed.
 pub fn clear() -> Result<bool, String> {
     match entry()?.delete_credential() {
+        Ok(()) => Ok(true),
+        Err(keyring::Error::NoEntry) => Ok(false),
+        Err(other) => Err(explain(other)),
+    }
+}
+
+/// AI provider keys share the Secret Service but never the GitHub account.
+pub fn ai_save(provider: &str, key: &str) -> Result<(), String> {
+    ai_entry(provider)?.set_password(key.trim()).map_err(explain)
+}
+
+pub fn ai_load(provider: &str) -> Result<Option<String>, String> {
+    match ai_entry(provider)?.get_password() {
+        Ok(secret) if secret.trim().is_empty() => Ok(None),
+        Ok(secret) => Ok(Some(secret.trim().to_string())),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(other) => Err(explain(other)),
+    }
+}
+
+pub fn ai_clear(provider: &str) -> Result<bool, String> {
+    match ai_entry(provider)?.delete_credential() {
         Ok(()) => Ok(true),
         Err(keyring::Error::NoEntry) => Ok(false),
         Err(other) => Err(explain(other)),

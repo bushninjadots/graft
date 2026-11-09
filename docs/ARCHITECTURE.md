@@ -18,6 +18,7 @@
 │  db.rs         SQLite, migrations, queries                    │
 │  tools.rs      environment probing                            │
 │  github.rs     auth, repos, search, reviews, issues, releases        │
+│  ai.rs         provider adapters, streaming chat, context, history  │
 │  relations.rs  local project graph from manifests + run log        │
 │  profile.rs    live profile snapshot + README renderer        │
 │  watchtower.rs favourites, polling, visits, radar discovery   │
@@ -44,13 +45,13 @@ Rules that keep this maintainable:
 | Path | Purpose |
 | ---- | ------- |
 | `src/App.svelte` | shell composition, keyboard shortcuts, boot sequence |
-| `src/views/` | Home, Projects, Repositories, Repository, Terminal, Review, Explore, Collections, Extract, ProfileStudio, Watchtower, Settings, ModuleView |
-| `src/lib/state/` | `appearance`, `nav`, `dashboard`, `github`, `notifications`, `sync`, `session`, `terminal`, `watchtower`, `library`, `extract`, `ui` |
+| `src/views/` | Home, Projects, Repositories, Repository, Terminal, Review, Explore, Collections, Extract, ProfileStudio, Watchtower, Settings, AI, ModuleView |
+| `src/lib/state/` | `appearance`, `nav`, `dashboard`, `github`, `notifications`, `sync`, `session`, `terminal`, `watchtower`, `library`, `extract`, `ai`, `ui` |
 | `src-tauri/src/schema/` | numbered SQL migrations, embedded with `include_str!` |
 | `~/.local/share/dev.graft.desktop/graft.db` | local database (WAL) |
 | `~/.local/share/dev.graft.desktop/` | app data root (Tauri `app_data_dir`) |
 
-## Data model (schema 5)
+## Data model (schema 6)
 
 ```sql
 settings(key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER)
@@ -67,6 +68,11 @@ repo_visits(full_name TEXT PK, owner TEXT, name TEXT, language TEXT, topics TEXT
 extraction_runs(id INTEGER PK, source TEXT, target TEXT, name TEXT, strategy TEXT,
                 file_count INTEGER, total_bytes INTEGER, backup_path TEXT, status TEXT,
                 message TEXT, created_at INTEGER)
+ai_conversations(id INTEGER PK AUTOINCREMENT, title TEXT, provider TEXT, model TEXT,
+                 endpoint TEXT, created_at INTEGER, updated_at INTEGER)
+ai_messages(id INTEGER PK AUTOINCREMENT,
+            conversation_id INTEGER REFERENCES ai_conversations(id) ON DELETE CASCADE,
+            role TEXT, content TEXT, context TEXT DEFAULT '[]', created_at INTEGER)
 ```
 
 Migrations are append-only: add `schema/00N_*.sql`, bump `SCHEMA_VERSION`, add an
@@ -89,6 +95,7 @@ Settings blobs currently stored:
 | `app.notifications.seen` | imported GitHub notification keys, so they are added once |
 | `repos.view` | repository layout (`list`, `cards`, `compact`) |
 | `repos.scope` | last repository source (`mine`, `explore`) |
+| `ai.preferences` | `{ providerId, model, endpoint, system }` — never API keys |
 
 Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`.
 
@@ -174,15 +181,26 @@ Settings writes are debounced in the UI (200 ms) and upserted with `ON CONFLICT`
 | `extract_execute` | `source, selection, strategy, target, name, engine?, confirmed` | `ExtractResult`; re-validates and records the run |
 | `extract_runs` | — | `ExtractionRun[]` (recent successful runs) |
 | `project_graph` | — | `ProjectGraph` (projects, manifests, shared remotes, dependencies, extraction edges) |
+| `ai_catalog` | — | `AiCatalog` (providers plus keyring status per provider) |
+| `ai_save_key` | `provider, key` | `void` — writes only the Secret Service entry |
+| `ai_clear_key` | `provider` | `bool` (credential removed) |
+| `ai_conversations` | — | `AiConversation[]` |
+| `ai_conversation` | `id` | `AiConversationDetail` with messages and context titles |
+| `ai_delete_conversation` | `id` | `void` — cascades to messages |
+| `ai_context_scan` | `projectId` | `AiContextFile[]` (read-only local listing) |
+| `ai_context_read` | `projectId, paths` | `AiContextItem[]` (path-confined, binary-safe, truncated) |
+| `ai_cancel` | `requestId` | `void` — stops the active stream after the current chunk |
+| `ai_chat` | `request, channel` | `AiReply`; streams `started`, `delta`, `done` or `cancelled` events |
 
 Serde maps snake_case fields to camelCase for JS. GitHub payloads deserialize from
 the API's snake_case and serialize with `rename_all(serialize = "camelCase")`. Bump this table when adding a
 command, and add the matching wrapper in `lib/api.ts`.
 
-## Security posture (Phase 1)
+## Security posture
 
 - CSP permits own assets, `ipc:` and images from GitHub's avatar, raw and camo
-  hosts. No API origin is reachable from the webview; GitHub traffic is Rust-only.
+  hosts. No API origin is reachable from the webview; GitHub and AI traffic are
+  Rust-only.
 - Markdown (README, pull request bodies) is rendered with `marked` and sanitized
   with DOMPurify; links are handed to `open_external`, never navigated in-app.
 - File contents come from the contents API, are decoded in Rust, and are refused
@@ -192,6 +210,22 @@ command, and add the matching wrapper in `lib/api.ts`.
 - GitHub tokens live in the Secret Service through `keyring`; SQLite stores only the
   public OAuth client ID and the cached profile.
 - Tokens never cross IPC: `github_status` reports presence and identity, not the token.
+- AI provider keys use the same Secret Service store under `ai:<provider>`; the
+  catalog reports only whether a key is configured. Required keys are re-checked in
+  Rust before a request, and Google credentials travel in the `x-goog-api-key` header,
+  never in a URL. Remote endpoints require HTTPS; plain HTTP is accepted only for
+  loopback hosts. Endpoints cannot embed credentials, query strings or fragments,
+  and redirects are not followed.
+- AI context is opt-in. The workspace lists local project files read-only, and file
+  contents are returned only for the paths the user attached. Any endpoint whose host
+  is not loopback requires an explicit consent checkbox before selected text leaves
+  the machine; Rust re-checks that consent before saving or sending the request.
+  Context titles and conversation messages stay in local SQLite, while attached file
+  contents are not persisted.
+- AI responses are sanitized Markdown and never execute tools or commands. Chat
+  requests are cancelled in Rust, and a partial reply is still saved when stopped.
+  Review and extraction assistants only prefill a conversation; they never submit a
+  review, change a file or run an extraction.
 - `open_external` accepts `http(s)` only. Local Git writes are limited to stage,
   commit, branch create/switch, fetch, pull and push on directories the user linked;
   branch names are validated before they reach `git`.

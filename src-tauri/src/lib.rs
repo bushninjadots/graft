@@ -1,3 +1,4 @@
+mod ai;
 mod commands;
 mod db;
 mod extract;
@@ -25,6 +26,7 @@ pub fn run() {
             let db = Db::open(&db_path).map_err(std::io::Error::other)?;
             app.manage(db);
             app.manage(terminal::TerminalManager::default());
+            app.manage(ai::AiManager::default());
 
             Ok(())
         })
@@ -111,6 +113,16 @@ pub fn run() {
             extract::extract_execute,
             extract::extract_runs,
             relations::project_graph,
+            ai::ai_catalog,
+            ai::ai_save_key,
+            ai::ai_clear_key,
+            ai::ai_conversations,
+            ai::ai_conversation,
+            ai::ai_delete_conversation,
+            ai::ai_context_scan,
+            ai::ai_context_read,
+            ai::ai_cancel,
+            ai::ai_chat,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start GRAFT");

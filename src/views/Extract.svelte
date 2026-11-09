@@ -2,6 +2,8 @@
   import { onMount } from "svelte";
   import type { ExtractComponent } from "../lib/api";
   import { plural, relativeTime } from "../lib/format";
+  import { focusContext } from "../lib/state/ai.svelte";
+  import { navigate } from "../lib/state/ui.svelte";
   import {
     analyzeSelection,
     applySuggestion,
@@ -359,6 +361,58 @@
     confirming = false;
     await executePlan();
   }
+
+  function askAI(): void {
+    if (!analysis) return;
+    const source = extract.scan?.source ?? extract.source;
+    const deps =
+      analysis.externalDeps.length > 0
+        ? analysis.externalDeps.map((dep) => `${dep.name} (${dep.files} files)`).join(", ")
+        : "none";
+    const incoming =
+      analysis.incoming.length > 0
+        ? analysis.incoming
+            .slice(0, 80)
+            .map((ref) => `${ref.from}:${ref.line} → ${ref.to}`)
+            .join("\n")
+        : "none";
+    const files = analysis.files
+      .slice(0, 120)
+      .map((file) => `${file.path} (${file.language}, ${file.lines} lines)`)
+      .join("\n");
+    const items = [
+      {
+        title: `Extraction analysis: ${source}`,
+        content: [
+          `Selected ${analysis.fileCount} files, ${analysis.totalBytes} bytes, ${analysis.totalLines} lines.`,
+          `Cohesion ${Math.round(analysis.cohesion * 100)}%; internal ${analysis.internalReferences}, outgoing ${analysis.outgoingReferences}, incoming ${analysis.incomingReferences}.`,
+          `External dependencies: ${deps}`,
+          `Files:\n${files}`,
+          `Incoming references:\n${incoming}`,
+          analysis.warnings.length > 0 ? `Warnings:\n${analysis.warnings.join("\n")}` : "Warnings: none",
+        ].join("\n\n"),
+      },
+    ];
+    if (plan) {
+      items.push({
+        title: `Extraction plan: ${plan.strategy}`,
+        content: [
+          `Strategy: ${plan.strategy}; engine: ${plan.engine}.`,
+          plan.branch ? `Branch: ${plan.branch}` : `Target: ${plan.target}`,
+          `Files: ${plan.fileCount}; bytes: ${plan.totalBytes}; backup: ${plan.requiresBackup ? "yes" : "no"}.`,
+          plan.historyPrefix ? `History prefix: ${plan.historyPrefix}` : "No history prefix.",
+          `Checks:\n${plan.checks.map((check) => `${check.ok ? "ok" : "failed"} · ${check.label}: ${check.detail}`).join("\n")}`,
+          plan.warnings.length > 0 ? `Warnings:\n${plan.warnings.join("\n")}` : "Warnings: none",
+          `Actions:\n${plan.actions.map((action) => `${action.kind} · ${action.path}: ${action.detail}`).join("\n")}`,
+        ].join("\n\n"),
+      });
+    }
+    focusContext(
+      items,
+      `Review this component extraction from ${source}. Point out coupling risks, files or references that may have been missed, and whether the chosen strategy (${plan?.strategy ?? extract.strategy}) is appropriate. Do not run or change anything.`,
+    );
+    navigate("ai");
+  }
 </script>
 
 <section class="view">
@@ -610,6 +664,10 @@
             </p>
           </div>
           <div class="head-actions">
+            <button class="btn ghost" onclick={askAI}>
+              <Icon name="ai" size={12} />
+              Ask AI
+            </button>
             <span class="badge" class:accent={analysis.cohesion >= 0.5}>
               cohesion {percent(analysis.cohesion)}
             </span>

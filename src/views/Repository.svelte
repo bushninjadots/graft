@@ -19,7 +19,8 @@
     type RepoRelease,
   } from "../lib/api";
   import { closeRepo, github, loadRepos } from "../lib/state/github.svelte";
-  import { notify, ui } from "../lib/state/ui.svelte";
+  import { focusContext } from "../lib/state/ai.svelte";
+  import { navigate, notify, ui } from "../lib/state/ui.svelte";
   import { pushNotification, type NotificationTarget } from "../lib/state/notifications.svelte";
   import {
     addWatch,
@@ -121,6 +122,36 @@
   function open(url: string | null | undefined): void {
     if (!url) return;
     void api.openExternal(url).catch((cause) => notify(message(cause), "danger"));
+  }
+
+  function askAI(): void {
+    if (!pullDetail) return;
+    const pull = pullDetail.pull;
+    const patches = pullDetail.files
+      .slice(0, 8)
+      .map(
+        (file) =>
+          `### ${file.filename} (${file.status}, +${file.additions} −${file.deletions})\n${
+            file.patch ?? "(no patch returned)"
+          }`,
+      )
+      .join("\n\n");
+    focusContext(
+      [
+        {
+          title: `Pull request #${pull.number}: ${pull.title}`,
+          content: `${pull.authorLogin} proposes merging ${pull.headRef} into ${pull.baseRef}.\n\n${
+            pull.body || "(no description)"
+          }`,
+        },
+        {
+          title: `Diff for pull request #${pull.number}`,
+          content: patches || "(no file patches returned)",
+        },
+      ],
+      `Review pull request #${pull.number} in ${owner}/${name}. Focus on correctness, risky changes, missing tests and anything a reviewer should question. Do not approve or submit anything; return review notes for me to act on.`,
+    );
+    navigate("ai");
   }
 
   function size(bytes: number): string {
@@ -1047,6 +1078,13 @@
                   · +{pull.additions} −{pull.deletions} in {plural(pull.changedFiles, "file")}
                   · <button class="link" onclick={() => open(detail?.htmlUrl ? `${detail.htmlUrl}/pull/${pull.number}` : pull.htmlUrl)}>open on GitHub ↗</button>
                 </p>
+                <div class="row">
+                  <button class="btn ghost" onclick={askAI}>
+                    <Icon name="ai" size={12} />
+                    Ask AI to review
+                  </button>
+                  <span class="hint">Sends the pull request text and up to 8 file patches to your chosen AI provider.</span>
+                </div>
                 {#if pull.body}
                   <div class="markdown" bind:this={readmeEl}>{@html render(pull.body)}</div>
                 {/if}

@@ -674,6 +674,97 @@ export type ExtractionRun = {
   createdAt: number;
 };
 
+export type AiProvider = {
+  id: string;
+  label: string;
+  protocol: string;
+  defaultEndpoint: string;
+  models: string[];
+  local: boolean;
+  keyRequired: boolean;
+  hint: string;
+};
+
+export type AiKeyStatus = {
+  provider: string;
+  configured: boolean;
+  error: string | null;
+};
+
+export type AiCatalog = {
+  providers: AiProvider[];
+  keys: AiKeyStatus[];
+};
+
+export type AiConversation = {
+  id: number;
+  title: string;
+  provider: string;
+  model: string;
+  endpoint: string;
+  messageCount: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type AiMessage = {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  context: string[];
+  createdAt: number;
+};
+
+export type AiConversationDetail = {
+  conversation: AiConversation;
+  messages: AiMessage[];
+};
+
+export type AiContextFile = {
+  path: string;
+  bytes: number;
+};
+
+export type AiContextItem = {
+  path: string;
+  content: string;
+  truncated: boolean;
+};
+
+export type AiContextInput = {
+  title: string;
+  content: string;
+};
+
+export type AiMessageInput = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+export type AiChatRequest = {
+  requestId: string;
+  conversationId: number | null;
+  provider: string;
+  model: string;
+  endpoint: string | null;
+  system: string | null;
+  messages: AiMessageInput[];
+  context: AiContextInput[];
+  consent: boolean;
+};
+
+export type AiReply = {
+  conversationId: number;
+  messageId: number;
+  content: string;
+};
+
+export type AiStreamEvent =
+  | { type: "started"; conversationId: number }
+  | { type: "delta"; text: string }
+  | { type: "done"; conversationId: number; messageId: number }
+  | { type: "cancelled"; conversationId: number; messageId: number };
+
 /** True when running inside the Tauri webview rather than a plain browser tab. */
 export const isDesktop =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -903,6 +994,25 @@ export const api = {
     call<ProfileRepoResult>("github_create_profile_repo", { login }),
 
   projectGraph: () => call<ProjectGraph>("project_graph"),
+
+  aiCatalog: () => call<AiCatalog>("ai_catalog"),
+  aiSaveKey: (provider: string, key: string) =>
+    call<void>("ai_save_key", { provider, key }),
+  aiClearKey: (provider: string) => call<boolean>("ai_clear_key", { provider }),
+  aiConversations: () => call<AiConversation[]>("ai_conversations"),
+  aiConversation: (id: number) => call<AiConversationDetail>("ai_conversation", { id }),
+  aiDeleteConversation: (id: number) =>
+    call<void>("ai_delete_conversation", { id }),
+  aiContextScan: (projectId: number) =>
+    call<AiContextFile[]>("ai_context_scan", { projectId }),
+  aiContextRead: (projectId: number, paths: string[]) =>
+    call<AiContextItem[]>("ai_context_read", { projectId, paths }),
+  aiCancel: (requestId: string) => call<void>("ai_cancel", { requestId }),
+  aiChat: (request: AiChatRequest, onEvent: (event: AiStreamEvent) => void) => {
+    const channel = new Channel<AiStreamEvent>();
+    channel.onmessage = onEvent;
+    return call<AiReply>("ai_chat", { request, channel });
+  },
 
   repoSaveFile: (
     owner: string,

@@ -159,13 +159,14 @@ export const NAV_ITEMS: NavItem[] = [
     id: "ai",
     label: "AI Workspace",
     group: "Intelligence",
-    status: "planned",
+    status: "ready",
     phase: 5,
     summary: "Your providers, your keys, your context — never a required dependency.",
     bullets: [
-      "Anthropic, OpenAI, OpenRouter, Ollama, LM Studio and compatible endpoints",
-      "Explicit context selection before anything leaves the machine",
-      "Assistance for reviews, extraction and explanations; GRAFT works without it",
+      "Anthropic, Gemini, OpenAI, OpenRouter, Ollama, LM Studio, llama.cpp and compatible endpoints",
+      "Keys in the system keyring with streaming responses from the Rust engine",
+      "Explicit file context and per-message approval before remote content is sent",
+      "Saved conversations and assistance seeded from reviews and extraction plans",
     ],
   },
   {

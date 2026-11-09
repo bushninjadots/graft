@@ -7,7 +7,7 @@ review, monitoring, extraction and developer tooling in one lightweight applicat
 It is a native desktop instrument (Tauri 2 + Rust + Svelte 5), not a website in a
 window.
 
-> Status: **Phase 1–4 complete**. Real OAuth device-flow sign-in with the token kept in
+> Status: **Phase 1–5 complete**. Real OAuth device-flow sign-in with the token kept in
 > the system keyring, a live repository list, an in-app repository workspace (README,
 > code, commits, pull requests, issues, branches, releases), star/fork/clone, editing
 > text files where you have push access, and Git actions for local projects. A real PTY
@@ -22,8 +22,10 @@ window.
 > Python, Go, C/C++ and shell, and produces a checked plan for copy, move, history,
 > branch or fork extraction. A project relationship panel links local projects by
 > shared remote, package dependency and extraction history, and the status bar shows
-> the live GitHub rate limit. AI and plugins remain scheduled phases and render
-> explicit planned modules — never fake data. See [`docs/PLAN.md`](docs/PLAN.md).
+> the live GitHub rate limit. Personal AI connects eight providers with keys held in
+> the keyring, explicit context selection, streamed replies and saved conversations.
+> Plugins remain a scheduled phase and render explicit planned modules — never fake
+> data. See [`docs/PLAN.md`](docs/PLAN.md).
 
 ![GRAFT repository workspace](docs/screenshots/repository.png)
 
@@ -70,6 +72,14 @@ window.
   (package.json, Cargo.toml, pyproject.toml, go.mod, composer.json) and Git remotes to
   link projects by shared remote, package dependency and extraction history. Nothing
   is inferred beyond local files.
+- **Personal AI**: a chat workspace for Anthropic, OpenAI, Google, OpenRouter, Ollama,
+  LM Studio, llama.cpp and OpenAI-compatible endpoints. Keys stay in the keyring;
+  provider, model, endpoint and system prompt stay in local settings. Attach up to 12
+  project files explicitly, with a consent gate before any non-loopback endpoint
+  receives anything. Replies stream and can be stopped; conversations and messages
+  are saved locally, while attached file contents are not. Pull requests and
+  extraction analyses can open a pre-filled review conversation without submitting
+  anything.
 - **Notifications**: a persistent bell keeps pushes, pulls, checkouts, commits, file
   edits, forks and issues, and imports unread GitHub notifications from the website
   (mentions, reviews, issues, pull requests, workflow activity). Each item stays until
@@ -179,25 +189,31 @@ was added can be reauthorised from Profile Studio when setting a status.
 ```
 src/                  Svelte 5 interface
   views/              Home, Projects, Repositories, Repository, Terminal, Review,
-                      Explore, Collections, ProfileStudio, Watchtower, Settings, ModuleView
+                      Explore, Collections, ProfileStudio, Watchtower, Settings, AI,
+                      ModuleView
   lib/components/     shell, palette, dashboard panels, diff and graph renderers
   lib/state/          reactive state (appearance, nav, dashboard, github, notifications,
-                      sync, session, terminal, watchtower, library, ui)
+                      sync, session, terminal, watchtower, library, extract, ai, ui)
   lib/api.ts          the only IPC surface
-src-tauri/src/        Rust engine (commands, db, schema, github, git, secrets, tools,
-                      terminal, watchtower, library)
-  src-tauri/src/schema/  versioned SQL migrations (schema 4)
+src-tauri/src/        Rust engine (commands, db, schema, github, ai, git, secrets, tools,
+                      terminal, watchtower, library, extract, relations)
+  src-tauri/src/schema/  versioned SQL migrations (schema 6)
 docs/                 plan, architecture, design, product brief
 scripts/              icon rendering
 ```
 
 ## Storage and security
 
-- Database: `~/.local/share/dev.graft.desktop/graft.db` (SQLite, WAL, schema 4).
-- Secrets: GitHub tokens live in the system keyring (`dev.graft.desktop` service).
-  They are never written to SQLite, logs, localStorage or the webview.
-- Network: all GitHub requests are made by Rust. The webview CSP allows no external
-  connections and images only from GitHub's avatar, raw, camo and shields.io badge hosts.
+- Database: `~/.local/share/dev.graft.desktop/graft.db` (SQLite, WAL, schema 6).
+- Secrets: GitHub tokens and AI provider keys live in the system keyring
+  (`dev.graft.desktop` service). They are never written to SQLite, logs, localStorage
+  or the webview.
+- Network: all GitHub and AI requests are made by Rust. The webview CSP allows no
+  external connections and images only from GitHub's avatar, raw, camo and shields.io
+  badge hosts.
+- AI context is opt-in: files are read only when attached, remote providers require a
+  consent checkbox, paths are confined to the selected project, and attached contents
+  are not persisted. AI output never executes tools or commands.
 - Repository file writes are available only when the GitHub API reports push access,
   and require a second confirmation naming the branch, path and commit message.
   Profile repository creation and status changes are separate confirmed writes.

@@ -16,6 +16,7 @@
   import Collections from "./views/Collections.svelte";
   import Review from "./views/Review.svelte";
   import Extract from "./views/Extract.svelte";
+  import AIWorkspace from "./views/AI.svelte";
   import SettingsView from "./views/Settings.svelte";
   import ModuleView from "./views/ModuleView.svelte";
   import { navById } from "./lib/nav";
@@ -136,6 +137,8 @@
             <Review />
           {:else if ui.view === "extract"}
             <Extract />
+          {:else if ui.view === "ai"}
+            <AIWorkspace />
           {:else if ui.view === "watchtower"}
             <Watchtower />
           {:else if ui.view === "settings"}

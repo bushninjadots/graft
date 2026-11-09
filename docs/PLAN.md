@@ -9,7 +9,7 @@ Architecture: `docs/ARCHITECTURE.md`. Visual system: `docs/DESIGN.md`.
 
 ## Current status
 
-**Phase 1–3 complete for the shipped surfaces.** Phase 1a added auth, the repository
+**Phase 1–5 complete for the shipped surfaces.** Phase 1a added auth, the repository
 list and local Git inspection. Phase 1b added the in-app repository workspace
 (README, code tree, commits, pull requests, issues, branches), star/fork/clone, and
 fetch/pull/push for linked projects. Phase 1 also ships the real PTY terminal
@@ -30,8 +30,11 @@ suggestions, pre-flight extraction plans and confirmed copy, move, history-split
 local-branch and fork strategies with backups, selectable subtree/filter-repo
 engines and a recorded run log. A project-wide relationship panel links local
 projects by shared remote, package dependency and extraction history. Repository
-Releases and a live GitHub rate-limit chip round out the workspace. Phase 0 is
-complete and verified as well.
+Releases and a live GitHub rate-limit chip round out the workspace. Phase 5 adds the
+Personal AI workspace: eight provider adapters, keyring-held keys, explicit local
+context selection with remote-provider consent, streamed replies with cancellation,
+saved conversations, and review and extraction assistants that only prefill a chat.
+Phase 0 is complete and verified as well.
 
 Delivered in Phase 1a:
 
@@ -63,7 +66,7 @@ the standalone Explore surface.
 | `svelte-check` | 0 errors, 0 warnings |
 | `vite build` | passes — 330 kB JS / 67 kB CSS (builder, search, sync, notifications and issues included) |
 | `cargo check` | passes |
-| `cargo test` | 43/43 pass (migrations, settings, projects, Git parsing, branch validation, a real commit/branch cycle in a temp repo, device flow, HTTP client, profile publish/write payloads, profile snapshot shape and every README section, issues, project graph, extraction plans/engines/branch/fork, file-path validation, search queries, notification mapping, PTY validation, Watchtower parsing/history/visits) |
+| `cargo test` | 50/50 pass (migrations, settings, projects, Git parsing, branch validation, a real commit/branch cycle in a temp repo, device flow, HTTP client, profile publish/write payloads, profile snapshot shape and every README section, issues, project graph, extraction plans/engines/branch/fork, file-path validation, search queries, notification mapping, PTY validation, Watchtower parsing/history/visits, AI provider delta parsing, SSE framing, event serialization, endpoint/context validation, credential-free Google stream URLs, context wrapping and conversation persistence/cascade) |
 | Repository API | verified live with a real token: repository list, detail, README and branches rendered in the running window; commits and pull requests fetched with no errors |
 | Keyring round-trip | verified against the live Secret Service on this machine |
 | Visual review | running window captured with `grim`; Repositories sign-in flow inspected |
@@ -258,11 +261,38 @@ Studio still draws recorded source → component runs.
 
 ---
 
-## Phase 5 — Personal AI
+## Phase 5 — Personal AI (complete)
 
-Provider adapters (Anthropic, OpenAI, OpenRouter, Ollama, LM Studio, OpenAI-compatible),
-keys in the keyring, explicit context selection, streaming responses, extraction and
-review assistants. Every AI action is reviewable and permissioned.
+`ai.rs` exposes eight providers: Anthropic, OpenAI, Google, OpenRouter, Ollama,
+LM Studio, llama.cpp and an OpenAI-compatible custom endpoint. Anthropic uses its
+Messages API, Google uses `streamGenerateContent`, and the rest use the OpenAI
+`/chat/completions` shape; OpenRouter receives GRAFT attribution headers. API keys
+live in the Secret Service under `ai:<provider>` and never cross IPC — the catalog
+reports only whether a key is configured. Required keys are re-checked in Rust before
+each request, Google credentials travel in `x-goog-api-key`, remote endpoints require
+HTTPS, and plain HTTP is limited to loopback hosts.
+
+The AI workspace keeps provider, model, endpoint and system prompt preferences in
+SQLite, but not keys. Context is explicit: a project file listing is read-only, the
+user attaches individual files, and any endpoint whose host is not loopback requires a
+consent checkbox before any selected text leaves the machine; Rust re-checks that
+consent before persisting or sending it. Local endpoints skip that gate. Context
+paths are canonicalized, confined to the project and limited to 12 items, 60k
+characters per file and 240k in total. Attached contents are not persisted; messages
+and the titles of attached items are.
+
+Replies stream over a Tauri channel with `started`, `delta`, `done` and `cancelled`
+events. Rust validates the endpoint, provider, model, system prompt and message
+history, saves the user turn before the request, and saves a partial assistant reply
+when a stream is cancelled. Conversations and messages live in `ai_conversations` and
+`ai_messages` (schema 6, cascading deletes). Assistant Markdown is rendered with
+`marked` and sanitized with DOMPurify.
+
+The repository pull-request view can prefill a review request with the PR text and up
+to eight file patches. Extract Studio can prefill a request with the coupling
+analysis and, when present, the extraction plan. Both only open a conversation with
+the context and a prompt; they never submit a review, change files or execute an
+extraction. Phase 5 is complete and verified.
 
 ---
 
